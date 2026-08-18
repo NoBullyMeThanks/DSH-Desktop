@@ -32,7 +32,9 @@
 
 ## 提交与 Pull Request
 
-当前工作副本不含可供分析的 Git 历史。建议使用简洁的 Conventional Commits，例如 `fix: 处理 DSH 启动超时`。Pull Request 应说明动机、主要改动和验证命令，关联相关 issue；界面或托盘行为变化需附截图。保持单个 PR 聚焦，避免夹带 `dist/`、日志、凭据或本机 `~/.dsh*` 数据。
+- 提交信息必须采用简洁的 Conventional Commits 格式 `type: 中文说明`；类型使用小写英文（如 `feat`、`fix`、`chore`），说明使用中文，例如 `fix: 处理 DSH 启动超时`。
+
+Pull Request 应说明动机、主要改动和验证命令，关联相关 issue；界面或托盘行为变化需附截图。保持单个 PR 聚焦，避免夹带 `dist/`、日志、凭据或本机 `~/.dsh*` 数据。
 
 ## 安全与配置
 
