@@ -1,0 +1,67 @@
+# 依赖与构建产物
+node_modules/
+dist/
+out/
+release/
+coverage/
+.nyc_output/
+.cache/
+.tmp/
+tmp/
+*.asar
+*.blockmap
+builder-debug.yml
+builder-effective-config.yaml
+
+# 日志与诊断文件
+*.log
+logs/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+*.dmp
+
+# 环境变量与本机覆盖配置
+.env
+.env.*
+!.env.example
+!.env.*.example
+*.local.json
+*.local.yaml
+*.local.yml
+.npmrc.local
+.npmrc.user
+
+# 凭据、密钥与签名材料
+.credentials.yaml
+credentials.yaml
+**/.credentials.yaml
+secrets/
+.secrets/
+*.secret
+*.secrets
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+*.keystore
+*.mobileprovision
+
+# DSH 与桌面启动器的本机用户数据
+.dsh/
+.dsh-desktop/
+/preferences.json
+/version.json
+/dsh.log
+
+# 编辑器、系统与本地代理配置
+.vscode/
+.idea/
+*.code-workspace
+.codex/
+.agents/
+.DS_Store
+Thumbs.db
+Desktop.ini
