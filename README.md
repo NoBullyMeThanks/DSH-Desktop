@@ -1,6 +1,6 @@
-# DSH Desktop
+# DSH-Desktop
 
-DSH Desktop 是一个面向 Windows 的 DeepSeek Harness（DSH）桌面启动器。它把 DSH 原本需要通过命令行启动的本地 Web 服务包装成可直接双击运行的桌面应用，并默认跟随 DeepSeek 官方 npm 包的最新版本。
+DSH-Desktop 是一个面向 Windows 的 DeepSeek Harness（DSH）桌面启动器。它把 DSH 原本需要通过命令行启动的本地 Web 服务包装成可直接双击运行的桌面应用，并默认跟随 DeepSeek 官方 npm 包的最新版本。
 
 > 本项目不重新实现 DSH，也不修改其 Web UI。桌面窗口加载的是本机 DSH 服务提供的官方界面。
 
@@ -12,7 +12,7 @@ DeepSeek Harness 官方主要提供命令行入口：
 npx @deepseek-ai/dsh web
 ```
 
-该命令会在本机启动 HTTP 服务，用户还需要自行管理终端进程、访问地址和运行时版本。DSH Desktop 将这些步骤自动化：
+该命令会在本机启动 HTTP 服务，用户还需要自行管理终端进程、访问地址和运行时版本。DSH-Desktop 将这些步骤自动化：
 
 ```text
 启动桌面应用
@@ -95,8 +95,8 @@ npm run build
 
 构建结果位于 `dist/`：
 
-- `DSH Desktop Setup x.x.x.exe`：向导式安装包，支持桌面和开始菜单快捷方式。
-- `DSH Desktop x.x.x.exe`：无需安装的便携版。
+- `DSH-Desktop Setup x.x.x.exe`：向导式安装包，支持桌面和开始菜单快捷方式。
+- `DSH-Desktop x.x.x.exe`：无需安装的便携版。
 
 当前安装包不内置 Node.js 和 npm，因此安装或运行便携版的电脑仍需确保 `node` 与 `npm` 可以从系统 PATH 访问。
 
@@ -114,13 +114,13 @@ npm run build
 
 | 路径 | 内容 |
 |---|---|
-| `~/.dsh-desktop/runtime/` | DSH Desktop 管理的 DSH npm 运行时 |
+| `~/.dsh-desktop/runtime/` | DSH-Desktop 管理的 DSH npm 运行时 |
 | `~/.dsh-desktop/version.json` | 当前版本和最近的历史版本 |
 | `~/.dsh-desktop/preferences.json` | 启动更新检查等桌面端偏好 |
 | `~/.dsh-desktop/dsh.log` | 桌面启动器和 DSH 子进程日志 |
 | `~/.dsh/` | DSH 自身的凭据、设置和会话数据 |
 
-DSH Desktop 与命令行版 DSH 默认共享 `~/.dsh/`。API Key 可以在 DSH Web UI 的 Settings → Models 中配置，也可以通过 DSH 支持的环境变量提供。
+DSH-Desktop 与命令行版 DSH 默认共享 `~/.dsh/`。API Key 可以在 DSH Web UI 的 Settings → Models 中配置，也可以通过 DSH 支持的环境变量提供。
 
 ## 项目结构
 

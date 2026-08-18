@@ -1,6 +1,6 @@
 {
   "name": "dsh-desktop",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "默认跟随 DeepSeek 官方最新版的 DSH 桌面启动器",
   "main": "main.js",
   "private": true,
@@ -17,7 +17,7 @@
   },
   "build": {
     "appId": "com.deepseek.dsh-desktop",
-    "productName": "DSH Desktop",
+    "productName": "DSH-Desktop",
     "directories": {
       "output": "dist"
     },
@@ -50,7 +50,7 @@
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName": "DSH Desktop",
+      "shortcutName": "DSH-Desktop",
       "installerIcon": "assets/icon.ico",
       "uninstallerIcon": "assets/icon.ico"
     }
