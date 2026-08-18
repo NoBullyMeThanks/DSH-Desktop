@@ -8,8 +8,8 @@
  *   3. 拉起 `node <dsh>/lib/bin.js web --port 0` 子进程；
  *   4. 解析 stdout 就绪行 `dsh web: http://127.0.0.1:PORT` → 原生窗口加载该 URL。
  *
- * 窗口使用透明的原生 Window Controls Overlay：DSH 内容铺满整个窗口，
- * 系统窗口按钮覆盖在右上角。快捷键走隐藏菜单，Ctrl+滚轮由内容页直接处理。
+ * 窗口隐藏系统标题栏：DSH 内容铺满整个窗口，右上角窗口按钮由隔离的 preload UI 绘制。
+ * 快捷键走隐藏菜单，Ctrl+滚轮由内容页直接处理。
  * 关窗隐藏到托盘，托盘「退出」才真退。
  */
 const { app, BrowserWindow, ipcMain, Menu, dialog, shell, nativeTheme } = require('electron')
@@ -26,8 +26,6 @@ const { DEFAULT_UPDATE_PREFERENCES, normalizeUpdatePreferences } = require('./up
 
 /** 等待 dsh 打印就绪 URL 的超时（首启要初始化 profile，放宽到 120s）。 */
 const READY_TIMEOUT_MS = 120_000
-/** 覆盖层不占布局高度；35px 保持原生窗口按钮区域紧凑。 */
-const WINDOW_CONTROLS_OVERLAY_HEIGHT = 35
 /** 每次缩放半级，约等于 9.5%，沿用原有手感。 */
 const ZOOM_STEP = 0.5
 const APP_ID = 'com.deepseek.dsh-desktop'
@@ -44,7 +42,6 @@ let logStream = null
 let tray = null
 let isQuitting = false
 let locale = 'zh'
-let contentChromeState = null
 let lastWheelZoomAt = 0
 let splashState = null
 let splashReady = false
@@ -136,13 +133,13 @@ function applySettings(settings) {
   }
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.setBackgroundColor(nativeTheme.shouldUseDarkColors ? '#151517' : '#ffffff')
-    updateWindowControlsOverlay()
   }
   const loc = settings.locale ?? 'zh'
   if (loc !== locale) {
     locale = loc
     if (tray) tray.setLocale(locale)
     appendLog(`[settings] locale -> ${locale}`)
+    sendWindowControlsState()
   }
   refreshSplashAppearance()
 }
@@ -249,38 +246,20 @@ function refreshSplashAppearance() {
   sendSplashState()
 }
 
-// ── 主窗口（透明原生 Window Controls Overlay） ─────────────────────────────
+// ── 主窗口（隐藏系统标题栏 + preload 自绘窗口按钮） ───────────────────────────
 
-function validCssColor(value) {
-  return typeof value === 'string'
-    && value.length > 0
-    && value.length <= 100
-    && !/[;{}<>]/.test(value)
-}
-
-function normalizeChromeState(state) {
-  if (!state || typeof state !== 'object') return null
-  const colors = ['baseColor', 'sidebarColor', 'borderColor', 'symbolColor']
-  if (colors.some((key) => !validCssColor(state[key]))) return null
-  const sidebarWidth = Number(state.sidebarWidth)
-  if (!Number.isFinite(sidebarWidth) || sidebarWidth < 0 || sidebarWidth > 2000) return null
-  return {
-    baseColor: state.baseColor,
-    sidebarColor: state.sidebarColor,
-    borderColor: state.borderColor,
-    symbolColor: state.symbolColor,
-    sidebarWidth,
-  }
-}
-
-function updateWindowControlsOverlay() {
+function sendWindowControlsState() {
   if (!mainWindow || mainWindow.isDestroyed()) return
-  const symbolColor = contentChromeState?.symbolColor
-    ?? (nativeTheme.shouldUseDarkColors ? '#f9fafb' : '#0f1115')
-  mainWindow.setTitleBarOverlay({
-    color: '#00000000',
-    symbolColor,
-    height: WINDOW_CONTROLS_OVERLAY_HEIGHT,
+  const wc = mainWindow.webContents
+  if (wc.isDestroyed()) return
+  wc.send('dsh:window-controls-state', {
+    maximized: mainWindow.isMaximized(),
+    labels: {
+      minimize: t(locale, 'windowMinimize'),
+      maximize: t(locale, 'windowMaximize'),
+      restore: t(locale, 'windowRestore'),
+      close: t(locale, 'windowClose'),
+    },
   })
 }
 
@@ -295,11 +274,6 @@ function createMainWindow(url) {
     minWidth: 900,
     minHeight: 600,
     titleBarStyle: 'hidden',
-    titleBarOverlay: {
-      color: '#00000000',
-      symbolColor: nativeTheme.shouldUseDarkColors ? '#f9fafb' : '#0f1115',
-      height: WINDOW_CONTROLS_OVERLAY_HEIGHT,
-    },
     roundedCorners: true,
     backgroundColor: nativeTheme.shouldUseDarkColors ? '#151517' : '#ffffff',
     autoHideMenuBar: true,
@@ -338,7 +312,7 @@ function createMainWindow(url) {
   wc.once('did-finish-load', () => {
     appendLog('[window] did-finish-load')
     resetZoomContent()
-    updateWindowControlsOverlay()
+    sendWindowControlsState()
     setTimeout(() => revealMainWindow('did-finish-load fallback'), 150)
   })
   wc.on('did-fail-load', (event, errorCode, errorDescription, validatedURL, isMainFrame) => {
@@ -359,10 +333,11 @@ function createMainWindow(url) {
       mainWindow.hide()
     }
   })
+  mainWindow.on('maximize', sendWindowControlsState)
+  mainWindow.on('unmaximize', sendWindowControlsState)
   mainWindow.on('closed', () => {
     if (revealFallback) clearTimeout(revealFallback)
     mainWindow = null
-    contentChromeState = null
   })
 }
 
@@ -377,15 +352,24 @@ function showMainWindow() {
   return false
 }
 
-// ── DSH 外观 → 原生窗口按钮 ─────────────────────────────────────────────────
+// ── DSH 内容页 → 桌面窗口操作 ─────────────────────────────────────────────────
 
 function setupIpc() {
-  ipcMain.on('dsh:chrome-state', (event, state) => {
+  ipcMain.on('dsh:window-controls-ready', (event) => {
     if (!mainWindow || mainWindow.isDestroyed() || event.sender !== mainWindow.webContents) return
-    const normalized = normalizeChromeState(state)
-    if (!normalized) return
-    contentChromeState = normalized
-    updateWindowControlsOverlay()
+    sendWindowControlsState()
+  })
+
+  ipcMain.on('dsh:window-control', (event, action) => {
+    if (!mainWindow || mainWindow.isDestroyed() || event.sender !== mainWindow.webContents) return
+    if (action === 'minimize') {
+      mainWindow.minimize()
+    } else if (action === 'toggle-maximize') {
+      if (mainWindow.isMaximized()) mainWindow.unmaximize()
+      else mainWindow.maximize()
+    } else if (action === 'close') {
+      mainWindow.close()
+    }
   })
 
   ipcMain.on('dsh:dialog-action', (event, payload) => {
@@ -1147,7 +1131,6 @@ async function runStartupAttempt() {
 
 app.setAppUserModelId(APP_ID)
 nativeTheme.on('updated', () => {
-  updateWindowControlsOverlay()
   refreshSplashAppearance()
 })
 

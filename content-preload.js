@@ -8,15 +8,15 @@ const { ipcRenderer } = require('electron')
 let frame = null
 let sidebar = null
 let resizeObserver = null
-let probe = null
 let dragRow = null
 let scheduled = false
-let lastPayload = ''
 let dialogHost = null
 let dialogRoot = null
 let activeDialogState = null
 let dialogPreviousFocus = null
 let dialogActionPending = false
+let windowControlsHost = null
+let windowControlsRoot = null
 
 const DIALOG_MODES = new Set(['loading', 'progress', 'info', 'confirm', 'error'])
 
@@ -336,6 +336,120 @@ function handleDialogKeydown(event) {
 ipcRenderer.on('dsh:dialog-state', (_event, state) => renderDialog(state))
 window.addEventListener('keydown', handleDialogKeydown, true)
 
+function ensureWindowControls() {
+  if (windowControlsRoot || !document.body) return
+
+  windowControlsHost = document.createElement('div')
+  windowControlsHost.id = 'dsh-desktop-window-controls-host'
+  Object.assign(windowControlsHost.style, {
+    position: 'fixed',
+    top: '0',
+    right: '0',
+    zIndex: '2147483646',
+    pointerEvents: 'none',
+    webkitAppRegion: 'no-drag',
+  })
+  windowControlsRoot = windowControlsHost.attachShadow({ mode: 'closed' })
+  windowControlsRoot.innerHTML = `
+    <style>
+      :host {
+        all: initial;
+        color: var(--dsw-alias-label-primary, #171717);
+        font-family: var(--dsw-font-family, "Segoe UI Variable", "Segoe UI", sans-serif);
+      }
+      * { box-sizing: border-box; }
+      .controls {
+        display: flex;
+        width: 84px;
+        height: 28px;
+        pointer-events: auto;
+        -webkit-app-region: no-drag;
+      }
+      button {
+        width: 28px;
+        height: 28px;
+        display: grid;
+        padding: 0;
+        place-items: center;
+        color: inherit;
+        background: transparent;
+        border: 0;
+        border-radius: 0;
+        outline: none;
+      }
+      button:hover {
+        background: var(--dsw-alias-interactive-bg-hover, rgba(127, 127, 127, 0.14));
+      }
+      button:focus-visible {
+        box-shadow: inset 0 0 0 2px var(--dsw-alias-state-business-primary, #4d6bfe);
+      }
+      button[data-action="close"]:hover,
+      button[data-action="close"]:focus-visible {
+        color: #ffffff;
+        background: #c42b1c;
+      }
+      svg {
+        width: 11px;
+        height: 11px;
+        overflow: visible;
+        fill: none;
+        stroke: currentColor;
+        stroke-linecap: square;
+        stroke-width: 1;
+        vector-effect: non-scaling-stroke;
+      }
+      .restore { display: none; }
+      .controls[data-maximized="true"] .maximize { display: none; }
+      .controls[data-maximized="true"] .restore { display: block; }
+      @media (prefers-reduced-motion: reduce) {
+        button { transition: none; }
+      }
+    </style>
+    <div class="controls" data-maximized="false">
+      <button type="button" data-action="minimize">
+        <svg viewBox="0 0 12 12" aria-hidden="true"><path d="M2 8.5h8" /></svg>
+      </button>
+      <button type="button" data-action="toggle-maximize">
+        <svg class="maximize" viewBox="0 0 12 12" aria-hidden="true"><rect x="2" y="2" width="8" height="8" /></svg>
+        <svg class="restore" viewBox="0 0 12 12" aria-hidden="true"><path d="M4 3V2h6v6H9M2 4h6v6H2z" /></svg>
+      </button>
+      <button type="button" data-action="close">
+        <svg viewBox="0 0 12 12" aria-hidden="true"><path d="M2.5 2.5l7 7m0-7l-7 7" /></svg>
+      </button>
+    </div>
+  `
+  document.body.appendChild(windowControlsHost)
+
+  windowControlsRoot.querySelector('.controls').addEventListener('click', (event) => {
+    const button = event.target.closest('button[data-action]')
+    if (!button) return
+    ipcRenderer.send('dsh:window-control', button.dataset.action)
+  })
+}
+
+function renderWindowControlsState(state) {
+  if (!state || typeof state !== 'object') return
+  ensureWindowControls()
+  if (!windowControlsRoot) return
+  const controls = windowControlsRoot.querySelector('.controls')
+  controls.dataset.maximized = state.maximized === true ? 'true' : 'false'
+
+  const labels = state.labels && typeof state.labels === 'object' ? state.labels : {}
+  const labelByAction = {
+    minimize: labels.minimize,
+    'toggle-maximize': state.maximized === true ? labels.restore : labels.maximize,
+    close: labels.close,
+  }
+  for (const [action, label] of Object.entries(labelByAction)) {
+    if (typeof label !== 'string' || !label) continue
+    const button = windowControlsRoot.querySelector(`button[data-action="${action}"]`)
+    button.setAttribute('aria-label', label)
+    button.title = label
+  }
+}
+
+ipcRenderer.on('dsh:window-controls-state', (_event, state) => renderWindowControlsState(state))
+
 function ensureDragStyle() {
   if (document.getElementById('dsh-desktop-window-drag-style')) return
   const style = document.createElement('style')
@@ -381,25 +495,6 @@ function updateDragRegion() {
   if (dragRow) dragRow.setAttribute('data-dsh-desktop-drag-region', '')
 }
 
-function colorFromToken(token, property, fallback) {
-  if (!probe) {
-    probe = document.createElement('span')
-    Object.assign(probe.style, {
-      position: 'fixed',
-      width: '0',
-      height: '0',
-      visibility: 'hidden',
-      pointerEvents: 'none',
-    })
-    document.body.appendChild(probe)
-  }
-  probe.style.removeProperty('color')
-  probe.style.removeProperty('background-color')
-  probe.style.setProperty(property, `var(${token})`)
-  const value = getComputedStyle(probe).getPropertyValue(property).trim()
-  return value || fallback
-}
-
 function findFrame() {
   const root = document.getElementById('root')
   if (!root) return null
@@ -420,48 +515,35 @@ function observeLayout(nextFrame) {
   frame = nextFrame
   sidebar = nextSidebar
   if (resizeObserver) resizeObserver.disconnect()
-  resizeObserver = new ResizeObserver(scheduleReport)
+  resizeObserver = new ResizeObserver(scheduleLayoutUpdate)
   if (frame) resizeObserver.observe(frame)
   if (sidebar) resizeObserver.observe(sidebar)
   updateDragRegion()
 }
 
-function report() {
+function updateLayout() {
   scheduled = false
   if (!document.body) return
   if (!frame || !frame.isConnected || !sidebar || !sidebar.isConnected) observeLayout(findFrame())
   updateDragRegion()
-
-  const bodyStyle = getComputedStyle(document.body)
-  const baseFallback = bodyStyle.backgroundColor || 'rgb(255, 255, 255)'
-  const payload = {
-    baseColor: colorFromToken('--dsw-alias-bg-base', 'background-color', baseFallback),
-    sidebarColor: colorFromToken('--dsw-specific-sidebar-fill', 'background-color', baseFallback),
-    borderColor: colorFromToken('--dsw-alias-border-l1', 'background-color', 'rgba(0, 0, 0, 0.06)'),
-    symbolColor: colorFromToken('--dsw-alias-label-primary', 'color', bodyStyle.color || 'rgb(15, 17, 21)'),
-    sidebarWidth: sidebar ? sidebar.getBoundingClientRect().width : 0,
-  }
-  const serialized = JSON.stringify(payload)
-  if (serialized === lastPayload) return
-  lastPayload = serialized
-  ipcRenderer.send('dsh:chrome-state', payload)
 }
 
-function scheduleReport() {
+function scheduleLayoutUpdate() {
   if (scheduled) return
   scheduled = true
-  requestAnimationFrame(report)
+  requestAnimationFrame(updateLayout)
 }
 
 function start() {
   ensureDragStyle()
   ensureDialogUi()
+  ensureWindowControls()
+  ipcRenderer.send('dsh:window-controls-ready')
   observeLayout(findFrame())
-  const mutationObserver = new MutationObserver((mutations) => {
-    // colorFromToken 会更新隐藏探针的 style；忽略这类内部变更，避免观察器自激。
-    if (mutations.every((mutation) => mutation.target === probe)) return
+  const mutationObserver = new MutationObserver(() => {
+    // 隔离 UI 的 Shadow DOM 变更不进入页面观察范围，不会触发自激。
     if (!frame || !frame.isConnected || !sidebar || !sidebar.isConnected) observeLayout(findFrame())
-    scheduleReport()
+    scheduleLayoutUpdate()
   })
   mutationObserver.observe(document.documentElement, {
     attributes: true,
@@ -469,8 +551,8 @@ function start() {
     subtree: true,
     attributeFilter: ['class', 'style', 'data-ds-dark-theme', 'data-sidebar-collapsed'],
   })
-  window.addEventListener('resize', scheduleReport)
-  scheduleReport()
+  window.addEventListener('resize', scheduleLayoutUpdate)
+  scheduleLayoutUpdate()
 }
 
 if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start, { once: true })
