@@ -19,6 +19,9 @@ let windowControlsHost = null
 let windowControlsRoot = null
 
 const DIALOG_MODES = new Set(['loading', 'progress', 'info', 'confirm', 'error'])
+const MIN_DIALOG_TEXT_CONTRAST = 4.5
+const DARK_DIALOG_LABEL = Object.freeze({ red: 23, green: 23, blue: 23, alpha: 1 })
+const LIGHT_DIALOG_LABEL = Object.freeze({ red: 255, green: 255, blue: 255, alpha: 1 })
 
 function ensureDialogUi() {
   if (dialogRoot || !document.body) return
@@ -37,6 +40,9 @@ function ensureDialogUi() {
     <style>
       :host {
         all: initial;
+        --dsh-desktop-secondary-label: var(--dsw-alias-label-primary, #171717);
+        --dsh-desktop-primary-label: var(--dsw-alias-button-primary-label, #ffffff);
+        --dsh-desktop-danger-label: var(--dsw-alias-label-error, #d64545);
         color: var(--dsw-alias-label-primary, #171717);
         font-family: var(--dsw-font-family, "Segoe UI Variable", "Segoe UI", "Microsoft YaHei UI", sans-serif);
       }
@@ -159,7 +165,7 @@ function ensureDialogUi() {
         min-width: 80px;
         height: 36px;
         padding: 0 16px;
-        color: var(--dsw-alias-label-primary, #171717);
+        color: var(--dsh-desktop-secondary-label);
         background: var(--dsw-alias-button-secondary-fill, rgba(0, 0, 0, 0.055));
         border: 1px solid var(--dsw-alias-border-l1, transparent);
         border-radius: 10px;
@@ -171,7 +177,7 @@ function ensureDialogUi() {
         background: var(--dsw-alias-button-secondary-fill-hover, rgba(0, 0, 0, 0.09));
       }
       button[data-kind='primary'] {
-        color: var(--dsw-alias-button-primary-label, #ffffff);
+        color: var(--dsh-desktop-primary-label);
         background: var(--dsw-alias-button-primary-fill, #4d6bfe);
         border-color: transparent;
       }
@@ -179,7 +185,8 @@ function ensureDialogUi() {
         background: var(--dsw-alias-button-primary-fill-hover, #405de5);
       }
       button[data-kind='danger'] {
-        color: var(--dsw-alias-label-error, #d64545);
+        color: var(--dsh-desktop-danger-label);
+        border-color: color-mix(in srgb, var(--dsw-alias-label-error, #d64545) 55%, transparent);
       }
       button:disabled { opacity: 0.55; cursor: default; }
       button:focus-visible, .dialog:focus-visible {
@@ -196,6 +203,23 @@ function ensureDialogUi() {
         .indicator[data-mode='loading'],
         .indicator[data-mode='progress'] { animation-duration: 1.5s; }
       }
+      .color-probes {
+        position: fixed;
+        width: 1px;
+        height: 1px;
+        overflow: hidden;
+        pointer-events: none;
+        visibility: hidden;
+      }
+      .color-probes > span { display: block; }
+      [data-color-probe='surface'] { background: var(--dsw-alias-bg-layer-2, #ffffff); }
+      [data-color-probe='label-primary'] { background: var(--dsw-alias-label-primary, #171717); }
+      [data-color-probe='label-error'] { background: var(--dsw-alias-label-error, #d64545); }
+      [data-color-probe='primary-label'] { background: var(--dsw-alias-button-primary-label, #ffffff); }
+      [data-color-probe='primary-fill'] { background: var(--dsw-alias-button-primary-fill, #4d6bfe); }
+      [data-color-probe='primary-fill-hover'] { background: var(--dsw-alias-button-primary-fill-hover, #405de5); }
+      [data-color-probe='secondary-fill'] { background: var(--dsw-alias-button-secondary-fill, rgba(0, 0, 0, 0.055)); }
+      [data-color-probe='secondary-fill-hover'] { background: var(--dsw-alias-button-secondary-fill-hover, rgba(0, 0, 0, 0.09)); }
     </style>
     <div class="backdrop">
       <section class="dialog" role="dialog" aria-modal="true" aria-labelledby="dialog-title" aria-describedby="dialog-message" tabindex="-1">
@@ -209,8 +233,19 @@ function ensureDialogUi() {
         <div class="actions"></div>
       </section>
     </div>
+    <div class="color-probes" aria-hidden="true">
+      <span data-color-probe="surface"></span>
+      <span data-color-probe="label-primary"></span>
+      <span data-color-probe="label-error"></span>
+      <span data-color-probe="primary-label"></span>
+      <span data-color-probe="primary-fill"></span>
+      <span data-color-probe="primary-fill-hover"></span>
+      <span data-color-probe="secondary-fill"></span>
+      <span data-color-probe="secondary-fill-hover"></span>
+    </div>
   `
   document.body.appendChild(dialogHost)
+  syncDialogButtonContrast()
 
   dialogRoot.querySelector('.close').addEventListener('click', () => sendDialogAction(activeDialogState?.cancelAction))
   dialogRoot.querySelector('.backdrop').addEventListener('mousedown', (event) => {
@@ -218,6 +253,111 @@ function ensureDialogUi() {
       sendDialogAction(activeDialogState.cancelAction)
     }
   })
+}
+
+function parseCssRgb(value) {
+  if (typeof value !== 'string' || !/^rgba?\(/i.test(value.trim())) return null
+  const parts = value.match(/[\d.]+%?/g)
+  if (!parts || parts.length < 3) return null
+  const channels = parts.slice(0, 3).map((part) => {
+    const number = Number.parseFloat(part)
+    return part.endsWith('%') ? number * 2.55 : number
+  })
+  const alphaPart = parts[3]
+  const alphaNumber = alphaPart === undefined ? 1 : Number.parseFloat(alphaPart)
+  const alpha = alphaPart?.endsWith('%') ? alphaNumber / 100 : alphaNumber
+  if (![...channels, alpha].every(Number.isFinite)) return null
+  return {
+    red: Math.min(255, Math.max(0, channels[0])),
+    green: Math.min(255, Math.max(0, channels[1])),
+    blue: Math.min(255, Math.max(0, channels[2])),
+    alpha: Math.min(1, Math.max(0, alpha)),
+  }
+}
+
+function compositeCssColor(foreground, background) {
+  const alpha = foreground.alpha + background.alpha * (1 - foreground.alpha)
+  if (alpha === 0) return { red: 0, green: 0, blue: 0, alpha: 0 }
+  const channel = (name) => (
+    foreground[name] * foreground.alpha
+    + background[name] * background.alpha * (1 - foreground.alpha)
+  ) / alpha
+  return {
+    red: channel('red'),
+    green: channel('green'),
+    blue: channel('blue'),
+    alpha,
+  }
+}
+
+function relativeLuminance(color) {
+  const linear = (channel) => {
+    const value = channel / 255
+    return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4
+  }
+  return 0.2126 * linear(color.red) + 0.7152 * linear(color.green) + 0.0722 * linear(color.blue)
+}
+
+function contrastRatio(foreground, background) {
+  const opaqueForeground = compositeCssColor(foreground, background)
+  const foregroundLuminance = relativeLuminance(opaqueForeground)
+  const backgroundLuminance = relativeLuminance(background)
+  const lighter = Math.max(foregroundLuminance, backgroundLuminance)
+  const darker = Math.min(foregroundLuminance, backgroundLuminance)
+  return (lighter + 0.05) / (darker + 0.05)
+}
+
+function chooseReadableLabel(current, backgrounds) {
+  if (!current || !Array.isArray(backgrounds) || backgrounds.length === 0) return current
+  const candidates = [current, DARK_DIALOG_LABEL, LIGHT_DIALOG_LABEL]
+  const score = (candidate) => Math.min(...backgrounds.map((background) => contrastRatio(candidate, background)))
+  if (score(current) >= MIN_DIALOG_TEXT_CONTRAST) return current
+  return candidates.reduce((best, candidate) => score(candidate) > score(best) ? candidate : best)
+}
+
+function formatCssRgb(color) {
+  return color.alpha < 1
+    ? `rgba(${Math.round(color.red)}, ${Math.round(color.green)}, ${Math.round(color.blue)}, ${color.alpha})`
+    : `rgb(${Math.round(color.red)}, ${Math.round(color.green)}, ${Math.round(color.blue)})`
+}
+
+function dialogProbeColor(name) {
+  const probe = dialogRoot?.querySelector(`[data-color-probe="${name}"]`)
+  return probe ? parseCssRgb(getComputedStyle(probe).backgroundColor) : null
+}
+
+function setDialogLabelProperty(name, color) {
+  if (!dialogHost || !color) return
+  const value = formatCssRgb(color)
+  if (dialogHost.style.getPropertyValue(name) !== value) dialogHost.style.setProperty(name, value)
+}
+
+function syncDialogButtonContrast() {
+  if (!dialogHost || !dialogRoot) return
+  const surface = dialogProbeColor('surface')
+  if (!surface) return
+  const background = (name) => {
+    const color = dialogProbeColor(name)
+    return color ? compositeCssColor(color, surface) : null
+  }
+  const primaryBackgrounds = ['primary-fill', 'primary-fill-hover'].map(background).filter(Boolean)
+  const secondaryBackgrounds = ['secondary-fill', 'secondary-fill-hover'].map(background).filter(Boolean)
+  if (primaryBackgrounds.length > 0) {
+    setDialogLabelProperty(
+      '--dsh-desktop-primary-label',
+      chooseReadableLabel(dialogProbeColor('primary-label'), primaryBackgrounds),
+    )
+  }
+  if (secondaryBackgrounds.length > 0) {
+    setDialogLabelProperty(
+      '--dsh-desktop-secondary-label',
+      chooseReadableLabel(dialogProbeColor('label-primary'), secondaryBackgrounds),
+    )
+    setDialogLabelProperty(
+      '--dsh-desktop-danger-label',
+      chooseReadableLabel(dialogProbeColor('label-error'), secondaryBackgrounds),
+    )
+  }
 }
 
 function isValidDialogState(state) {
@@ -274,6 +414,7 @@ function renderDialog(state) {
   }
 
   actions.hidden = actions.childElementCount === 0
+  syncDialogButtonContrast()
   dialogHost.style.display = 'block'
   requestAnimationFrame(() => {
     const defaultButton = typeof state.defaultAction === 'string'
@@ -526,6 +667,7 @@ function updateLayout() {
   if (!document.body) return
   if (!frame || !frame.isConnected || !sidebar || !sidebar.isConnected) observeLayout(findFrame())
   updateDragRegion()
+  syncDialogButtonContrast()
 }
 
 function scheduleLayoutUpdate() {
