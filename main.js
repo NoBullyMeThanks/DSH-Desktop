@@ -23,9 +23,15 @@ const settingsReader = require('./settings-reader.js')
 const { t } = require('./i18n.js')
 const { createOperationLock } = require('./runtime-operation-lock.js')
 const { DEFAULT_UPDATE_PREFERENCES, normalizeUpdatePreferences } = require('./update-preferences.js')
+const { captureStallDiagnostics, extractDebuggerWsUrl } = require('./stall-diagnostics.js')
 
 /** 等待 dsh 打印就绪 URL 的超时（首启要初始化 profile，放宽到 120s）。 */
 const READY_TIMEOUT_MS = 120_000
+/** 就绪行迟迟不出现时，触发「卡住诊断」快照的阈值（只记录证据，不干预）。
+ *  实测：正常热启动 1.4~4.4s；卡顿最短 21.5s（8/20 实测热启动也会卡），
+ *  长卡顿 28~59s。10s 避开一切正常启动，60s 再补一枪覆盖长卡顿。 */
+const STALL_DIAGNOSTIC_DELAY_MS = 10_000
+const STALL_DIAGNOSTIC_SECOND_PASS_MS = 60_000
 /** 每次缩放半级，约等于 9.5%，沿用原有手感。 */
 const ZOOM_STEP = 0.5
 const APP_ID = 'com.deepseek.dsh-desktop'
@@ -543,7 +549,9 @@ function startDsh() {
     }
     let child
     try {
-      child = spawn('node', [bin, 'web', '--port', '0'], {
+      // --inspect=127.0.0.1:0：子进程启动即带本地调试端口（随机空闲端口），
+      // 卡住诊断直接连 stderr 里打印的 ws 地址抓栈，避免事后附加不可靠。
+      child = spawn('node', ['--inspect=127.0.0.1:0', bin, 'web', '--port', '0'], {
         env: process.env,
         stdio: ['ignore', 'pipe', 'pipe'],
         windowsHide: true,
@@ -557,11 +565,16 @@ function startDsh() {
     let stderrBuf = ''
     let settled = false
     let readyTimer = null
+    let diagTimer = null
+    let diagTimer2 = null
+    let childDebugWsUrl = null
 
     const finish = (result) => {
       if (settled) return
       settled = true
       if (readyTimer) clearTimeout(readyTimer)
+      if (diagTimer) clearTimeout(diagTimer)
+      if (diagTimer2) clearTimeout(diagTimer2)
       resolve(result)
     }
 
@@ -575,6 +588,8 @@ function startDsh() {
     child.stderr.on('data', (d) => {
       stderrBuf += String(d)
       appendLog('[dsh] ' + String(d))
+      // 解析 Node inspector 的 ws 地址；在累计缓冲上匹配，防跨 chunk 截断。
+      if (!childDebugWsUrl) childDebugWsUrl = extractDebuggerWsUrl(stderrBuf)
     })
     child.on('error', (e) => finish({ ok: false, error: `无法启动 node：${e.message}` }))
     child.on('close', (code) => {
@@ -594,6 +609,19 @@ function startDsh() {
     readyTimer = setTimeout(() => {
       if (!settled) finish({ ok: false, error: `等待 dsh web 就绪超时。\n${stderrBuf.slice(-2000)}` })
     }, READY_TIMEOUT_MS)
+    // 卡住诊断：就绪行超时阈值仍未见时，拍 CPU/内存快照并尽力抓调用栈写进日志。
+    // 只记录证据、不做干预——不杀进程、不重启，后续仍由 readyTimer 正常兜底。
+    const runStallDiagnostic = (passName) => {
+      if (settled) return
+      appendLog(`[dsh] 就绪行 ${passName} 未出现，抓取卡住诊断（pid ${child.pid}）`)
+      captureStallDiagnostics(child.pid, { wsUrl: childDebugWsUrl }).then((text) => {
+        appendLog(`[dsh] 诊断结果 ${passName}：\n${text}`)
+      }).catch((err) => {
+        appendLog(`[dsh] 诊断失败：${err && err.message ? err.message : err}`)
+      })
+    }
+    diagTimer = setTimeout(() => runStallDiagnostic(`${STALL_DIAGNOSTIC_DELAY_MS / 1000}s`), STALL_DIAGNOSTIC_DELAY_MS)
+    diagTimer2 = setTimeout(() => runStallDiagnostic(`${STALL_DIAGNOSTIC_SECOND_PASS_MS / 1000}s`), STALL_DIAGNOSTIC_SECOND_PASS_MS)
   })
 }
 

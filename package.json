@@ -29,6 +29,7 @@
       "settings-reader.js",
       "tray.js",
       "i18n.js",
+      "stall-diagnostics.js",
       "content-preload.js",
       "startup.html",
       "startup-preload.js",
