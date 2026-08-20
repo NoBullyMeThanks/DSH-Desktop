@@ -173,12 +173,43 @@ async function ensureRuntime(options = {}) {
   return { ...result, repaired: target !== 'latest' }
 }
 
-/** 向 npm registry 查 @deepseek-ai/dsh 的最新版本；失败（离线等）返回 null。 */
+/**
+ * 向 npm registry 查 @deepseek-ai/dsh 的最新可用版本；失败（离线等）返回 null。
+ *
+ * 官方把预发布版挂在 `next` 标签（如 0.1.0-rc.8），而 `latest` 标签可能停留在
+ * 更旧的版本，只看 `latest` 会漏掉新预发布版；这里同时读取两个标签取较大者，
+ * 与「跟随预览版最新」的意图一致。
+ */
 async function latestVersion() {
-  const res = await run(npmCommand(), ['view', PKG_NAME, 'version'], {})
+  const res = await run(npmCommand(), ['view', PKG_NAME, 'dist-tags', '--json'], {})
   if (!res.ok) return null
-  const first = res.out.trim().split(/\s+/)[0]
-  return parseVersion(first) ? first : null
+  return bestOfTags(parseDistTags(res.out))
+}
+
+/** 从 npm view --json 的 stdout 中解析 dist-tags 对象；失败返回 null。 */
+function parseDistTags(out) {
+  if (typeof out !== 'string') return null
+  const start = out.indexOf('{')
+  const end = out.lastIndexOf('}')
+  if (start === -1 || end <= start) return null
+  try {
+    const j = JSON.parse(out.slice(start, end + 1))
+    return j && typeof j === 'object' && !Array.isArray(j) ? j : null
+  } catch {
+    return null
+  }
+}
+
+/** 从 dist-tags 中取 SemVer 最大的版本（优先 latest 与 next）；无有效版本返回 null。 */
+function bestOfTags(tags) {
+  if (!tags || typeof tags !== 'object') return null
+  let best = null
+  for (const tag of ['latest', 'next']) {
+    const v = tags[tag]
+    if (typeof v !== 'string' || !parseVersion(v)) continue
+    if (!best || compareVersions(v, best) > 0) best = v
+  }
+  return best
 }
 
 /** 回退目标：最近一次被替换掉的版本（history 第一个）。 */
@@ -261,6 +292,8 @@ module.exports = {
   runtimeStatus,
   compareVersions,
   parseVersion,
+  parseDistTags,
+  bestOfTags,
   nodeVersion,
   nodeIsAvailable,
 }

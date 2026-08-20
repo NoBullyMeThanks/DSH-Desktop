@@ -33,6 +33,29 @@ test('Node 可用性不设置版本门槛', () => {
   assert.equal(runtime.nodeIsAvailable(null), false)
 })
 
+test('parseDistTags 解析 npm view --json 的 dist-tags 输出', () => {
+  const tags = runtime.parseDistTags('{\n  "latest": "0.1.0-rc.7",\n  "next": "0.1.0-rc.8"\n}\n')
+  assert.deepEqual(tags, { latest: '0.1.0-rc.7', next: '0.1.0-rc.8' })
+  assert.equal(runtime.parseDistTags('not json'), null)
+  assert.equal(runtime.parseDistTags('{ broken'), null)
+  assert.equal(runtime.parseDistTags(null), null)
+})
+
+test('bestOfTags 取 latest 与 next 中 SemVer 较大者', () => {
+  // 官方把 rc.8 挂在 next 而 latest 还停在 rc.7 的场景
+  assert.equal(runtime.bestOfTags({ latest: '0.1.0-rc.7', next: '0.1.0-rc.8' }), '0.1.0-rc.8')
+  // 只有 latest 时正常返回
+  assert.equal(runtime.bestOfTags({ latest: '1.0.0' }), '1.0.0')
+  // 正式版大于同主版本号的预发布版
+  assert.equal(runtime.bestOfTags({ latest: '1.0.0', next: '1.0.0-rc.1' }), '1.0.0')
+  // next 高于 latest 的主/次版本号时取 next
+  assert.equal(runtime.bestOfTags({ latest: '0.1.0', next: '0.2.0-rc.1' }), '0.2.0-rc.1')
+  // 无效版本被跳过
+  assert.equal(runtime.bestOfTags({ latest: 'garbage', next: '0.1.0-rc.8' }), '0.1.0-rc.8')
+  assert.equal(runtime.bestOfTags({}), null)
+  assert.equal(runtime.bestOfTags(null), null)
+})
+
 test('完整运行时直接复用', async (t) => {
   const runtimeDir = createRuntime(t)
   let installs = 0
