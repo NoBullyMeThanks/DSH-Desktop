@@ -4,6 +4,7 @@ const { ipcRenderer } = require('electron')
 
 let currentRequestId = null
 let defaultActionId = null
+let layoutFrame = null
 
 function isValidState(state) {
   return state &&
@@ -18,6 +19,7 @@ function render(state) {
 
   document.documentElement.lang = state.locale === 'en' ? 'en' : 'zh-CN'
   document.documentElement.dataset.theme = state.theme === 'dark' ? 'dark' : 'light'
+  document.documentElement.dataset.mode = state.mode
 
   const title = document.getElementById('title')
   const message = document.getElementById('message')
@@ -38,6 +40,7 @@ function render(state) {
     detail.textContent = ''
     actions.hidden = true
     actions.replaceChildren()
+    reportLayout(state)
     return
   }
 
@@ -68,6 +71,35 @@ function render(state) {
       : actions.querySelector('button')
     preferred?.focus()
   })
+  reportLayout(state)
+}
+
+function reportLayout(state) {
+  if (layoutFrame) cancelAnimationFrame(layoutFrame)
+  layoutFrame = requestAnimationFrame(() => {
+    layoutFrame = null
+    const card = document.querySelector('.window')
+    if (!card || currentRequestId !== state.id) return
+    ipcRenderer.send('splash:layout', {
+      id: currentRequestId,
+      mode: state.mode,
+      height: measureNaturalCardHeight(card),
+    })
+  })
+}
+
+function measureNaturalCardHeight(card) {
+  const cardRect = card.getBoundingClientRect()
+  const style = getComputedStyle(card)
+  const visibleContent = Array.from(card.querySelectorAll('.brand img, .content > *'))
+    .filter((element) => !element.hidden)
+  const contentBottom = visibleContent.reduce(
+    (bottom, element) => Math.max(bottom, element.getBoundingClientRect().bottom),
+    cardRect.top,
+  )
+  const paddingBottom = Number.parseFloat(style.paddingBottom) || 0
+  const borderBottom = Number.parseFloat(style.borderBottomWidth) || 0
+  return Math.ceil(contentBottom - cardRect.top + paddingBottom + borderBottom)
 }
 
 function sendAction(actionId) {

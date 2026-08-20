@@ -30,6 +30,7 @@
       "tray.js",
       "i18n.js",
       "stall-diagnostics.js",
+      "startup-layout.js",
       "content-preload.js",
       "startup.html",
       "startup-preload.js",

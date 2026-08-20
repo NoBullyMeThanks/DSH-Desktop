@@ -24,6 +24,7 @@ const { t } = require('./i18n.js')
 const { createOperationLock } = require('./runtime-operation-lock.js')
 const { DEFAULT_UPDATE_PREFERENCES, normalizeUpdatePreferences } = require('./update-preferences.js')
 const { captureStallDiagnostics, extractDebuggerWsUrl } = require('./stall-diagnostics.js')
+const { centeredSplashBounds, normalizeSplashMode, splashLayoutForContent } = require('./startup-layout.js')
 
 /** 等待 dsh 打印就绪 URL 的超时（首启要初始化 profile，放宽到 120s）。 */
 const READY_TIMEOUT_MS = 120_000
@@ -51,6 +52,7 @@ let locale = 'zh'
 let lastWheelZoomAt = 0
 let splashState = null
 let splashReady = false
+let splashRevealTimer = null
 let startupAttempt = 0
 let startupInProgress = false
 let activeAppDialog = null
@@ -155,9 +157,10 @@ function applySettings(settings) {
 function createSplash() {
   if (splash && !splash.isDestroyed()) return
   splashReady = false
+  const initialLayout = splashLayoutForContent('loading')
   splash = new BrowserWindow({
-    width: 440,
-    height: 260,
+    width: initialLayout.width,
+    height: initialLayout.height,
     show: false,
     icon: APP_ICON,
     frame: false,
@@ -177,10 +180,7 @@ function createSplash() {
   })
   const win = splash
   win.webContents.once('did-finish-load', () => {
-    if (win.isDestroyed() || splash !== win) return
-    splashReady = true
-    sendSplashState()
-    win.show()
+    markSplashReady(win)
   })
   win.webContents.once('did-fail-load', (_event, code, description) => {
     appendLog(`[splash] did-fail-load (${code}) ${description}`)
@@ -191,6 +191,7 @@ function createSplash() {
   })
   win.on('closed', () => {
     if (splash === win) {
+      clearSplashRevealTimer()
       splash = null
       splashReady = false
     }
@@ -204,7 +205,35 @@ function createSplash() {
   })
 }
 
+function clearSplashRevealTimer() {
+  if (!splashRevealTimer) return
+  clearTimeout(splashRevealTimer)
+  splashRevealTimer = null
+}
+
+function revealSplash(win) {
+  if (win.isDestroyed() || splash !== win) return
+  clearSplashRevealTimer()
+  if (!win.isVisible()) win.show()
+}
+
+function markSplashReady(win) {
+  if (win.isDestroyed() || splash !== win || splashReady) return
+  splashReady = true
+  sendSplashState()
+  if (!splashState) return
+  splashRevealTimer = setTimeout(() => revealSplash(win), 250)
+}
+
+function resizeSplash(layout) {
+  if (!splash || splash.isDestroyed()) return
+  const currentBounds = splash.getBounds()
+  if (currentBounds.width === layout.width && currentBounds.height === layout.height) return
+  splash.setBounds(centeredSplashBounds(currentBounds, layout))
+}
+
 function destroySplash() {
+  clearSplashRevealTimer()
   if (splash && !splash.isDestroyed()) splash.destroy()
   splash = null
   splashReady = false
@@ -217,6 +246,12 @@ function currentTheme() {
 
 function sendSplashState() {
   if (!splashReady || !splashState || !splash || splash.isDestroyed()) return
+  const mode = normalizeSplashMode(splashState.mode)
+  const currentBounds = splash.getBounds()
+  const expectedWidth = splashLayoutForContent(mode).width
+  if (currentBounds.width !== expectedWidth) {
+    resizeSplash({ width: expectedWidth, height: currentBounds.height })
+  }
   splash.webContents.send('splash:state', {
     ...splashState,
     locale,
@@ -396,9 +431,16 @@ function setupIpc() {
 
   ipcMain.on('splash:ready', (event) => {
     if (!splash || splash.isDestroyed() || event.sender !== splash.webContents) return
-    splashReady = true
-    sendSplashState()
-    splash.show()
+    markSplashReady(splash)
+  })
+
+  ipcMain.on('splash:layout', (event, payload) => {
+    if (!splash || splash.isDestroyed() || event.sender !== splash.webContents) return
+    if (!splashState || !payload || payload.id !== splashState.id) return
+    if (payload.mode !== normalizeSplashMode(splashState.mode) || !Number.isFinite(payload.height)) return
+
+    resizeSplash(splashLayoutForContent(payload.mode, payload.height))
+    revealSplash(splash)
   })
 
   ipcMain.on('splash:action', (event, payload) => {
