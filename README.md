@@ -96,7 +96,7 @@ npm start
 | 路径 | 内容 |
 |---|---|
 | `~/.dsh-desktop/runtime/` | DSH-Desktop 管理的 DSH npm 运行时 |
-| `~/.dsh-desktop/version.json` | 当前版本和最近的历史版本 |
+| `~/.dsh-desktop/version.json` | 当前已安装的 DSH 版本 |
 | `~/.dsh-desktop/preferences.json` | 启动更新检查等桌面端偏好 |
 | `~/.dsh-desktop/dsh.log` | 桌面启动器和 DSH 子进程日志 |
 | `~/.dsh/` | DSH 自身的凭据、设置和会话数据 |
