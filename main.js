@@ -593,7 +593,8 @@ function startDsh() {
     try {
       // --inspect=127.0.0.1:0：子进程启动即带本地调试端口（随机空闲端口），
       // 卡住诊断直接连 stderr 里打印的 ws 地址抓栈，避免事后附加不可靠。
-      child = spawn('node', ['--inspect=127.0.0.1:0', bin, 'web', '--port', '0'], {
+      // --no-open：dsh web 默认会用系统浏览器打开 Web UI，这里关掉，改由桌面窗口加载就绪 URL。
+      child = spawn('node', ['--inspect=127.0.0.1:0', bin, 'web', '--port', '0', '--no-open'], {
         env: process.env,
         stdio: ['ignore', 'pipe', 'pipe'],
         windowsHide: true,
@@ -818,7 +819,7 @@ async function performUpdateCheck(manual) {
       })
     : null
 
-  const latest = await runtime.latestVersion()
+  const latest = await runtime.latestVersion({ log: appendLog })
 
   if (!latest) {
     appendLog('[update] npm registry unavailable')
@@ -939,23 +940,37 @@ async function installRuntimeVersion(version, operation) {
 }
 
 async function performRuntimeInstall(version, operation) {
-  const isRollback = operation === 'rollback'
   while (true) {
     const progress = createAppDialog({
       mode: 'progress',
-      title: t(locale, isRollback ? 'rollbackInstallingTitle' : 'updateInstallingTitle'),
-      message: t(locale, isRollback ? 'rollbackInstallingMessage' : 'updateInstallingMessage', { version }),
+      title: t(locale, 'updateInstallingTitle'),
+      message: t(locale, 'updateInstallingMessage', { version }),
       cancelable: false,
       buttons: [],
     })
     appendLog(`[${operation}] installing ${version}`)
-    const installed = await runtime.installVersion(version)
+    let lastProgressAt = 0
+    const installed = await runtime.installVersion(version, {
+      log: appendLog,
+      // 把 npm 输出实时显示到进度弹窗，用户能看到下载到哪个包、是否在推进
+      onProgress: (text) => {
+        const now = Date.now()
+        if (now - lastProgressAt < 500) return
+        lastProgressAt = now
+        const line = String(text)
+          .replace(/\u001b\[[0-9;]*m/g, '') // 去掉 ANSI 颜色码
+          .split(/\r?\n/)
+          .filter(Boolean)
+          .pop()
+        if (line) progress.update({ detail: line.slice(-160) })
+      },
+    })
     if (!installed.ok) {
       appendLog(`[${operation}] install failed: ${installed.err ?? 'unknown error'}`)
       progress.update({
         mode: 'error',
-        title: t(locale, isRollback ? 'rollbackFailedTitle' : 'updateFailedTitle'),
-        message: t(locale, isRollback ? 'rollbackFailedMessage' : 'updateFailedMessage', { version }),
+        title: t(locale, 'updateFailedTitle'),
+        message: t(locale, 'updateFailedMessage', { version }),
         detail: String(installed.err ?? '').slice(-4000),
         cancelable: true,
         cancelAction: 'close',
@@ -1019,47 +1034,6 @@ function openInBrowser() {
   if (currentUrl) shell.openExternal(currentUrl)
 }
 
-async function rollback() {
-  if (!showMainWindow()) return
-  if (handlingUnexpectedDshExit) {
-    appendLog('[rollback] 忽略请求：DSH 正在等待用户恢复')
-    return
-  }
-  const activeOperation = runtimeOperationLock.activeOperation()
-  if (activeOperation) {
-    appendLog(`[rollback] 忽略请求：正在执行 ${activeOperation}`)
-    return
-  }
-  const target = runtime.rollbackTarget()
-  if (!target) {
-    await showAppDialog({
-      mode: 'info',
-      title: t(locale, 'rollbackNoHistoryTitle'),
-      message: t(locale, 'rollbackNoHistoryMessage'),
-      cancelable: true,
-      cancelAction: 'close',
-      defaultAction: 'close',
-      buttons: [dialogButton('close', 'actionClose', 'primary')],
-    })
-    return
-  }
-  const current = runtime.installedVersion() ?? '-'
-  const action = await showAppDialog({
-    mode: 'confirm',
-    title: t(locale, 'rollbackConfirmTitle'),
-    message: t(locale, 'rollbackConfirmMessage', { current, target }),
-    detail: t(locale, 'rollbackConfirmDetail'),
-    cancelable: true,
-    cancelAction: 'cancel',
-    defaultAction: 'cancel',
-    buttons: [
-      dialogButton('rollback', 'actionRollback', 'danger'),
-      dialogButton('cancel', 'actionCancel', 'primary'),
-    ],
-  })
-  if (action === 'rollback') await installRuntimeVersion(target, 'rollback')
-}
-
 function openLog() {
   shell.openPath(LOG_FILE).catch(() => shell.showItemInFolder(LOG_FILE))
 }
@@ -1088,7 +1062,6 @@ function setupTray() {
     startupUpdateCheckEnabled,
     setStartupUpdateCheckEnabled,
     openInBrowser,
-    rollback,
     openLog,
     openConfigDir,
     showMainWindow,
@@ -1232,8 +1205,11 @@ if (!gotLock) {
   app.on('before-quit', () => {
     isQuitting = true
     stopDsh()
+    runtime.killActiveChildren() // 应用退出时终止在跑的 npm 子进程，避免孤儿进程继续写运行时目录
     if (logStream && !logStream.writableEnded) {
       try { logStream.end() } catch {}
     }
   })
+  // 兜底：进程非正常退出时同样清理子进程（fire-and-forget）。
+  process.on('exit', () => runtime.killActiveChildren())
 }

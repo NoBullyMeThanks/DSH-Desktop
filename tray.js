@@ -38,7 +38,6 @@ function createTray(controller, locale) {
         click: (item) => controller.setStartupUpdateCheckEnabled(item.checked),
       },
       { label: t(locale, 'openInBrowser'), click: () => controller.openInBrowser() },
-      { label: t(locale, 'rollback'), enabled: !runtimeBusy, click: () => controller.rollback() },
       { type: 'separator' },
       { label: t(locale, 'openLog'), click: () => controller.openLog() },
       { label: t(locale, 'openConfig'), click: () => controller.openConfigDir() },

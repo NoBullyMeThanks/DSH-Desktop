@@ -2,7 +2,7 @@
 
 ## 项目结构与模块组织
 
-本仓库是面向 Windows 的 Electron 启动器，采用 CommonJS。`main.js` 负责应用生命周期、透明原生 Window Controls Overlay、快捷键及 DSH 子进程；BrowserWindow 直接加载 DSH 页面，不另设自定义标题栏页面。`content-preload.js` 负责外观观测和应用内隔离模态框；`startup.html` 与 `startup-preload.js` 实现主页面加载前的启动窗口。`runtime-manager.js` 管理 `@deepseek-ai/dsh` 的安装、更新和回退；`settings-reader.js`、`i18n.js`、`tray.js` 分别处理设置、文案和托盘。静态图标位于 `assets/`，打包结果写入 `dist/`；不要提交生成物或 `node_modules/`。
+本仓库是面向 Windows 的 Electron 启动器，采用 CommonJS。`main.js` 负责应用生命周期、透明原生 Window Controls Overlay、快捷键及 DSH 子进程；BrowserWindow 直接加载 DSH 页面，不另设自定义标题栏页面。`content-preload.js` 负责外观观测和应用内隔离模态框；`startup.html` 与 `startup-preload.js` 实现主页面加载前的启动窗口。`runtime-manager.js` 管理 `@deepseek-ai/dsh` 的安装和更新；`settings-reader.js`、`i18n.js`、`tray.js` 分别处理设置、文案和托盘。静态图标位于 `assets/`，打包结果写入 `dist/`；不要提交生成物或 `node_modules/`。
 
 ## 构建、测试与开发命令
 
@@ -20,7 +20,7 @@
 
 ## 测试指南
 
-仓库使用 Node.js 内置测试运行器，测试放入 `test/` 并命名为 `*.test.js`，目前没有覆盖率门槛。每次变更至少执行 `npm test`、语法检查和 `npm start` 冒烟测试。涉及运行时管理时，验证首次安装、离线复用、升级及回退；涉及窗口时，验证透明覆盖层、主题同步、Logo 行拖动、最小化、最大化、关闭到托盘及真正退出。
+仓库使用 Node.js 内置测试运行器，测试放入 `test/` 并命名为 `*.test.js`，目前没有覆盖率门槛。每次变更至少执行 `npm test`、语法检查和 `npm start` 冒烟测试。涉及运行时管理时，验证首次安装、离线复用及升级；涉及窗口时，验证透明覆盖层、主题同步、Logo 行拖动、最小化、最大化、关闭到托盘及真正退出。
 
 ## 弹窗与启动界面规范
 

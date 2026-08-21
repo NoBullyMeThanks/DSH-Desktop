@@ -34,7 +34,7 @@ npx @deepseek-ai/dsh web
 - 双击启动 DSH，无需手动维护终端和本地访问地址。
 - DSH 运行时独立安装在用户目录，不与桌面程序源码或安装包绑定。
 - 默认在应用启动后检查 npm 官方源，可在托盘中关闭自动检查。
-- 支持手动检查更新，以及在用户确认后回退到上一历史版本。
+- 支持手动检查更新。
 - DSH 异常退出时提供重试、日志和退出操作。
 - 应用使用由系统分配空闲端口，不固定占用 3080 等常见端口。
 - 窗口主题、语言和自绘窗口按钮跟随 DSH 设置。
@@ -47,7 +47,7 @@ npx @deepseek-ai/dsh web
 | Electron 43 | Windows 桌面窗口、托盘、IPC 和应用生命周期 |
 | Node.js / CommonJS | 启动 DSH 子进程、管理文件和运行时 |
 | `@deepseek-ai/dsh` | 提供本地服务与官方 Web UI |
-| npm | 首次安装、更新和回退 DSH 运行时 |
+| npm | 首次安装和更新 DSH 运行时 |
 | electron-builder | 生成 x64 NSIS 安装包和便携版 |
 | `node:test` | 运行时、版本比较、偏好迁移和互斥锁测试 |
 
@@ -110,8 +110,8 @@ main.js                    Electron 主进程、窗口、IPC、DSH 生命周期�
 content-preload.js         DSH 页面外观观测与 Shadow DOM 模态框
 startup.html               本地启动窗口页面
 startup-preload.js         启动窗口状态渲染与操作上报
-runtime-manager.js         DSH 安装、完整性校验、更新、回退和版本比较
-runtime-operation-lock.js  更新与回退的互斥控制
+runtime-manager.js         DSH 安装、完整性校验、更新和版本比较
+runtime-operation-lock.js  更新与安装的互斥控制
 update-preferences.js      自动更新偏好迁移与规范化
 settings-reader.js         DSH 主题和语言设置读取与监听
 tray.js                    系统托盘及菜单

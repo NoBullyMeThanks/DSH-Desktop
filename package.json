@@ -56,5 +56,8 @@
       "installerIcon": "assets/icon.ico",
       "uninstallerIcon": "assets/icon.ico"
     }
+  },
+  "dependencies": {
+    "semver": "^7.8.5"
   }
 }

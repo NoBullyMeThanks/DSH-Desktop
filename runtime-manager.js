@@ -1,65 +1,201 @@
 'use strict'
 /**
  * 运行时管理：把 `@deepseek-ai/dsh` 装进 `~/.dsh-desktop/runtime`，
- * 提供「安装 / 查最新 / 更新 / 回退 / 运行时完整性 / Node 可用性检查」能力。
+ * 提供「安装 / 查最新 / 更新 / 运行时完整性 / Node 可用性检查」能力。
  *
- * 只依赖 Node 内置模块，不依赖 Electron，可用纯 Node 单独单测。
+ * 不依赖 Electron，可用纯 Node 单独单测。
  *
- * 关键约定：桌面程序只认 npm registry（官方发布源），与本地的 git clone
- * 无关——「跟随最新版」就是向 npm 服务器查版本、下载包。
+ * 关键约定：桌面程序以 npm registry（官方发布源）为默认源；官方源不可达或
+ * 超时时自动回退到 npmmirror 镜像源，避免国内网络下安装/查版本无限卡死。
+ * 与本地的 git clone 无关——「跟随最新版」就是向 npm 服务器查版本、下载包。
  */
 const os = require('node:os')
 const fs = require('node:fs')
 const path = require('node:path')
+const https = require('node:https')
 const { spawn, spawnSync } = require('node:child_process')
+const semver = require('semver')
 
 /** 桌面程序自己的运行时/数据根目录。 */
 const BASE_DIR = path.join(os.homedir(), '.dsh-desktop')
 /** @deepseek-ai/dsh 的安装目录（npm 的 cwd）。 */
 const RUNTIME_DIR = path.join(BASE_DIR, 'runtime')
-/** 记录已装版本与历史（用于回退）的元数据文件。 */
+/** 记录已装版本的元数据文件。 */
 const VERSION_FILE = path.join(BASE_DIR, 'version.json')
 /** npm 上的官方发布包。 */
 const PKG_NAME = '@deepseek-ai/dsh'
+/** 官方源不可达或超时后回退的镜像源（国内网络通常更快）。 */
+const REGISTRY_MIRROR = 'https://registry.npmmirror.com/'
+/** 第二备用镜像源（腾讯云）。 */
+const REGISTRY_MIRROR_ALT = 'https://mirrors.cloud.tencent.com/npm/'
+/** 单次 npm 安装尝试的硬超时：网络卡死时不再无限等待（有实时进度时足够宽裕）。 */
+const NPM_INSTALL_TIMEOUT_MS = 600000
+/** 单次 npm view 查询的硬超时（元数据请求应很快完成）。 */
+const NPM_VIEW_TIMEOUT_MS = 60000
+/** npm 超时后等待进程树彻底退出的最长时间。 */
+const PROCESS_EXIT_TIMEOUT_MS = 10000
 /** npm 命令名：Windows 下由 run() 用 cmd.exe /c 解析 PATHEXT，这里统一用 `npm`。 */
 function npmCommand() {
   return 'npm'
 }
 
+let cachedNpmCliPath
+
+/**
+ * Windows 的 npm 是 .cmd，不能作为普通可执行文件直接 spawn。这里定位它背后的
+ * npm-cli.js，再交给系统 Node 执行，从根源上避免 cmd.exe 重新解析参数。
+ */
+function npmCliPath(override) {
+  if (override) return override
+  if (cachedNpmCliPath !== undefined) return cachedNpmCliPath
+  const candidates = []
+  if (process.env.npm_execpath) candidates.push(process.env.npm_execpath)
+  candidates.push(path.join(path.dirname(process.execPath), 'node_modules', 'npm', 'bin', 'npm-cli.js'))
+  if (process.platform === 'win32') {
+    try {
+      const found = spawnSync('where.exe', ['npm.cmd'], { encoding: 'utf8', windowsHide: true })
+      if (found.status === 0) {
+        for (const commandPath of String(found.stdout || '').split(/\r?\n/).filter(Boolean)) {
+          candidates.push(path.join(path.dirname(commandPath.trim()), 'node_modules', 'npm', 'bin', 'npm-cli.js'))
+        }
+      }
+    } catch {}
+  }
+  cachedNpmCliPath = candidates.find((candidate) => {
+    try { return fs.statSync(candidate).isFile() } catch { return false }
+  }) ?? null
+  return cachedNpmCliPath
+}
+
 /**
  * 跑一条命令，返回 `{ ok, code, out, err, error }`。
  * 用 spawn 管道拼接而非 exec，避免 npm install 输出超过默认 maxBuffer。
- * Windows 下用 cmd.exe /c 执行（npm 是 .cmd 脚本，不能直接 CreateProcess），
- * 避免 shell:true 的 DEP0190 弃用告警；本模块所有参数均无空格/特殊字符，
- * 故 join 成命令行字符串是安全的。
+ * Windows 下把 npm-cli.js 交给系统 Node 执行，所有参数仍通过 argv 数组传递，
+ * peer range 中的 `||`、`^` 等字符不会被 cmd.exe 当成控制符。
  */
 function run(cmd, args, opts = {}) {
   return new Promise((resolve) => {
     let out = ''
     let err = ''
     let child
+    let timer = null
+    let terminationTimer = null
+    let settled = false
+    let timedOut = false
     try {
-      if (process.platform === 'win32') {
-        child = spawn('cmd.exe', ['/d', '/s', '/c', [cmd, ...args].join(' ')], {
-          cwd: opts.cwd,
-          env: { ...process.env, ...opts.env },
-          stdio: ['ignore', 'pipe', 'pipe'],
-          windowsHide: true,
-        })
-      } else {
-        child = spawn(cmd, args, {
-          cwd: opts.cwd,
-          env: { ...process.env, ...opts.env },
-          stdio: ['ignore', 'pipe', 'pipe'],
-        })
+      let executable = cmd
+      let executableArgs = args
+      if (opts.npmCliPath || (process.platform === 'win32' && cmd === npmCommand())) {
+        const cliPath = npmCliPath(opts.npmCliPath)
+        if (!cliPath) return resolve({ ok: false, error: new Error('找不到 npm-cli.js，请确认系统 PATH 中的 npm 安装完整') })
+        executable = 'node'
+        executableArgs = [cliPath, ...args]
       }
+      child = spawn(executable, executableArgs, {
+        cwd: opts.cwd,
+        env: { ...process.env, ...opts.env },
+        stdio: ['ignore', 'pipe', 'pipe'],
+        windowsHide: true,
+      })
     } catch (e) {
       return resolve({ ok: false, error: e })
     }
-    child.stdout.on('data', (d) => { out += String(d) })
-    child.stderr.on('data', (d) => { err += String(d) })
-    child.on('error', (e) => resolve({ ok: false, error: e }))
-    child.on('close', (code) => resolve({ ok: code === 0, code, out, err }))
+    activeChildren.add(child.pid)
+    child.once('close', () => activeChildren.delete(child.pid))
+    child.once('error', () => activeChildren.delete(child.pid))
+    const settle = (result) => {
+      if (settled) return
+      settled = true
+      if (timer) { clearTimeout(timer); timer = null }
+      if (terminationTimer) { clearTimeout(terminationTimer); terminationTimer = null }
+      resolve(result)
+    }
+    const timeoutResult = (terminationUnconfirmed = false) => ({
+      ok: false,
+      code: null,
+      out,
+      err: `${err}\n[超时] 命令超过 ${opts.timeoutMs}ms 未完成，已终止${terminationUnconfirmed ? '（未确认进程完全退出）' : ''}`.trim(),
+      error: new Error(`命令超时（${opts.timeoutMs}ms）`),
+      timedOut: true,
+      terminationUnconfirmed,
+    })
+    if (opts.timeoutMs > 0) {
+      timer = setTimeout(() => {
+        timer = null
+        timedOut = true
+        killTree(child.pid).catch(() => false)
+        // 正常路径由 child close 确认退出；超过兜底时间仍无 close 时明确标记，
+        // 调用方必须停止切源，避免两个 npm 同时写同一个 runtime。
+        terminationTimer = setTimeout(() => settle(timeoutResult(true)), PROCESS_EXIT_TIMEOUT_MS)
+      }, opts.timeoutMs)
+    }
+    const onData = typeof opts.onData === 'function' ? opts.onData : null
+    child.stdout.on('data', (d) => { const s = String(d); out += s; if (onData) onData(s) })
+    child.stderr.on('data', (d) => { const s = String(d); err += s; if (onData) onData(s) })
+    child.on('error', (e) => settle(timedOut ? timeoutResult() : { ok: false, error: e }))
+    child.on('close', (code) => settle(timedOut ? timeoutResult() : { ok: code === 0, code, out, err }))
+  })
+}
+
+/** 终止命令及其子进程树（Windows 用 taskkill /T，避免孤儿 node 进程继续跑）。 */
+function killTree(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) return Promise.resolve(false)
+  if (process.platform !== 'win32') {
+    try { process.kill(pid, 'SIGTERM') } catch { return Promise.resolve(false) }
+    setTimeout(() => { try { process.kill(pid, 'SIGKILL') } catch {} }, 2000).unref()
+    return Promise.resolve(true)
+  }
+  return new Promise((resolve) => {
+    let killer
+    try {
+      killer = spawn('taskkill', ['/pid', String(pid), '/t', '/f'], { stdio: 'ignore', windowsHide: true })
+    } catch {
+      resolve(false)
+      return
+    }
+    killer.once('error', () => resolve(false))
+    killer.once('close', (code) => resolve(code === 0))
+  })
+}
+
+/** 仍在运行的子进程 PID（应用退出时用于清理，避免孤儿 npm 继续写 node_modules）。 */
+const activeChildren = new Set()
+
+/** 终止所有仍在运行的子进程树（应用退出前调用）。 */
+function killActiveChildren() {
+  for (const pid of Array.from(activeChildren)) killTree(pid).catch(() => false)
+  activeChildren.clear()
+}
+
+/** 源的可读名称，用于日志与错误提示。 */
+function sourceName(attempt) {
+  return attempt.registry ? attempt.registry : 'npm 配置源'
+}
+
+/** 去掉 registry URL 尾部斜杠，供探测与去重比较统一使用。 */
+function stripTrailingSlash(url) {
+  return url.replace(/\/+$/, '')
+}
+
+/**
+ * 快速探测一个 registry 是否可达：GET <registry>/-/ping，默认 5 秒超时。
+ * 任何 HTTP 响应（含 404）都视为可达；网络错误/超时视为不可达。
+ */
+function probeRegistry(registryUrl, timeoutMs = 5000) {
+  return new Promise((resolve) => {
+    let finished = false
+    const finish = (ok) => { if (!finished) { finished = true; resolve(ok) } }
+    let req
+    try {
+      req = https.get(`${stripTrailingSlash(registryUrl)}/-/ping`, { timeout: timeoutMs }, (res) => {
+        res.resume() // 读空响应体，释放连接
+        finish(true)
+      })
+    } catch {
+      return finish(false)
+    }
+    req.on('timeout', () => { req.destroy(); finish(false) })
+    req.on('error', () => finish(false))
   })
 }
 
@@ -70,17 +206,29 @@ function errMsg(res) {
   return `命令退出码 ${res.code}`
 }
 
-/** 确保运行时目录与最小 package.json 存在（npm install 的 cwd）。 */
-function ensureRuntimeDir() {
-  fs.mkdirSync(RUNTIME_DIR, { recursive: true })
-  const pkgJson = path.join(RUNTIME_DIR, 'package.json')
-  if (!fs.existsSync(pkgJson)) {
-    fs.writeFileSync(pkgJson, JSON.stringify({
-      private: true,
-      type: 'module',
-      description: 'DSH Desktop 管理的运行时，请勿手动修改',
-    }, null, 2) + '\n')
-  }
+/** 旧 npm 进程未确认退出时，停止切换安装源以保护运行时目录。 */
+function stopForUnconfirmedExit(lastErr) {
+  return { ok: false, err: `${lastErr}\n未确认旧 npm 进程已退出，已停止切换安装源以保护运行时目录。` }
+}
+
+/** 确保运行时目录存在（npm install 的 cwd）。 */
+function ensureRuntimeDir(runtimeDir = RUNTIME_DIR) {
+  fs.mkdirSync(runtimeDir, { recursive: true })
+}
+
+/**
+ * runtime 是桌面端独占管理目录，根依赖只保留当前精确版本 DSH。
+ * peer 修复统一使用 --no-save，避免旧 peer 约束污染下一次升级。
+ */
+function writeManagedRuntimeManifest(runtimeDir, version) {
+  fs.writeFileSync(path.join(runtimeDir, 'package.json'), JSON.stringify({
+    private: true,
+    type: 'module',
+    description: 'DSH Desktop 管理的运行时，请勿手动修改',
+    dependencies: {
+      [PKG_NAME]: version,
+    },
+  }, null, 2) + '\n')
 }
 
 /** 当前已安装的 @deepseek-ai/dsh 版本，未安装返回 null。 */
@@ -99,64 +247,316 @@ function binPath(runtimeDir = RUNTIME_DIR) {
   return path.join(runtimeDir, 'node_modules', ...PKG_NAME.split('/'), 'lib', 'bin.js')
 }
 
+/** 枚举 node_modules 中的包目录，同时覆盖包内嵌套的 node_modules。 */
+function packageDirs(nodeModulesDir) {
+  const result = []
+  let entries
+  try { entries = fs.readdirSync(nodeModulesDir, { withFileTypes: true }) } catch { return result }
+  for (const entry of entries) {
+    if (!entry.isDirectory() || entry.name.startsWith('.')) continue
+    const entryPath = path.join(nodeModulesDir, entry.name)
+    if (entry.name.startsWith('@')) {
+      let scopedEntries
+      try { scopedEntries = fs.readdirSync(entryPath, { withFileTypes: true }) } catch { continue }
+      for (const scopedEntry of scopedEntries) {
+        if (!scopedEntry.isDirectory()) continue
+        const packageDir = path.join(entryPath, scopedEntry.name)
+        result.push(packageDir, ...packageDirs(path.join(packageDir, 'node_modules')))
+      }
+      continue
+    }
+    result.push(entryPath, ...packageDirs(path.join(entryPath, 'node_modules')))
+  }
+  return result
+}
+
+/** 按 Node 的向上查找规则读取声明包可见的 peer package 版本。 */
+function peerPackageVersion(packageName, packageDir, runtimeDir) {
+  const packageParts = packageName.split('/')
+  const boundary = path.resolve(runtimeDir)
+  let current = path.resolve(packageDir)
+  while (true) {
+    const relative = path.relative(boundary, current)
+    if (relative.startsWith('..') || path.isAbsolute(relative)) break
+    try {
+      const manifestPath = path.join(current, 'node_modules', ...packageParts, 'package.json')
+      const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'))
+      return typeof manifest.version === 'string' ? manifest.version : null
+    } catch {}
+    if (current === boundary) break
+    const parent = path.dirname(current)
+    if (parent === current) break
+    current = parent
+  }
+  return null
+}
+
+const SEMVER_OPTIONS = { includePrerelease: true }
+
+/** 把同一个 peer 的多个 SemVer 范围合并成 npm 可接受的交集；无交集返回 null。 */
+function combinedPeerRange(ranges) {
+  const unique = Array.from(new Set(ranges))
+  if (unique.length === 0) return null
+  try {
+    for (const range of unique) new semver.Range(range, SEMVER_OPTIONS)
+  } catch {
+    return null
+  }
+  if (unique.length === 1) return unique[0]
+
+  let clauses = ['']
+  for (const range of unique) {
+    const parsed = new semver.Range(range, SEMVER_OPTIONS)
+    const next = new Set()
+    for (const existing of clauses) {
+      for (const comparatorSet of parsed.set) {
+        const appended = comparatorSet.map((comparator) => comparator.value).filter(Boolean).join(' ')
+        const combined = `${existing} ${appended}`.trim() || '*'
+        if (semver.minVersion(combined, SEMVER_OPTIONS)) {
+          next.add(new semver.Range(combined, SEMVER_OPTIONS).range || '*')
+        }
+        // 防止异常 manifest 制造巨大的 OR 笛卡尔积，冲突会作为安装错误呈现。
+        if (next.size >= 128) break
+      }
+      if (next.size >= 128) break
+    }
+    clauses = Array.from(next)
+    if (clauses.length === 0) return null
+  }
+  return clauses.join(' || ')
+}
+
+/**
+ * 纯前端/打包期的 peer 名单：这些包只在浏览器里渲染，或在打包时被烧进前端
+ * bundle，Node 后端进程不会 require 它们。第一阶段 --legacy-peer-deps 已跳过
+ * 整棵依赖树，第二阶段若再去严格补装这些 peer，反而会撞上它们之间不一致的
+ * peer 范围（如 use-sync-external-store 尚未声明 react 19 支持，把 react 限制
+ * 在 <19，而 @tanstack/react-virtual 又允许 react-dom 到 19，npm 无法同时满足）。
+ *
+ * zustand 虽然也声明 react peer，但它把 react/@types/react/immer 都标成 optional，
+ * 不会进入必需 peer 补装，故无需列入。
+ */
+const FRONTEND_ONLY_PEERS = new Set(['react', 'react-dom'])
+
+/** 判断 peer 是否属于纯前端/打包期（含 @types/* 类型包），后端运行时无需安装。 */
+function isFrontendOnlyPeer(name) {
+  if (FRONTEND_ONLY_PEERS.has(name)) return true
+  if (name.startsWith('@types/')) return true
+  return false
+}
+
+/**
+ * 找出缺失、版本不满足或范围冲突的必需 peer dependency。
+ * `--legacy-peer-deps` 会跳过所有 peer，必须在安装后显式补齐并验证；optional peer 不处理。
+ */
+function missingRequiredPeers(runtimeDir = RUNTIME_DIR) {
+  const requirements = new Map()
+  for (const packageDir of packageDirs(path.join(runtimeDir, 'node_modules'))) {
+    let manifest
+    try { manifest = JSON.parse(fs.readFileSync(path.join(packageDir, 'package.json'), 'utf8')) } catch { continue }
+    for (const [name, range] of Object.entries(manifest.peerDependencies ?? {})) {
+      if (manifest.peerDependenciesMeta?.[name]?.optional === true) continue
+      if (isFrontendOnlyPeer(name)) continue
+      const normalizedRange = typeof range === 'string' && range.trim() ? range.trim() : '*'
+      const list = requirements.get(name) ?? []
+      list.push({
+        range: normalizedRange,
+        requiredBy: typeof manifest.name === 'string' ? manifest.name : path.basename(packageDir),
+        packageDir,
+      })
+      requirements.set(name, list)
+    }
+  }
+
+  const missing = []
+  for (const [name, peers] of requirements) {
+    const unsatisfied = peers.filter((peer) => {
+      const version = peerPackageVersion(name, peer.packageDir, runtimeDir)
+      try {
+        return !semver.valid(version) || !semver.satisfies(version, peer.range, SEMVER_OPTIONS)
+      } catch {
+        return true
+      }
+    })
+    if (unsatisfied.length === 0) continue
+    const range = combinedPeerRange(peers.map((peer) => peer.range))
+    const hasInvalidRange = peers.some((peer) => !semver.validRange(peer.range, SEMVER_OPTIONS))
+    const entry = {
+      name,
+      range,
+      requiredBy: Array.from(new Set(peers.map((peer) => peer.requiredBy))).join('、'),
+    }
+    if (hasInvalidRange) entry.invalidRange = true
+    else if (!range) {
+      // 让 npm 在补装阶段尝试联合解析整个 peer 图；完成后仍会再次严格校验。
+      entry.conflict = true
+      entry.installRange = peers[0].range
+    }
+    missing.push(entry)
+  }
+  return missing.sort((a, b) => a.name.localeCompare(b.name))
+}
+
 /**
  * 检查运行时是否完整可用。仅有 package.json 不足以证明安装成功，
- * 入口文件缺失时必须重新安装，避免启动重试一直命中同一个损坏目录。
+ * 入口文件或必需 peer dependency 缺失时必须重新安装，避免启动重试一直
+ * 命中同一个损坏目录。
  */
 function runtimeStatus(runtimeDir = RUNTIME_DIR) {
   const version = installedVersion(runtimeDir)
   let hasBin = false
   try { hasBin = fs.statSync(binPath(runtimeDir)).isFile() } catch { hasBin = false }
+  const missingPeers = hasBin ? missingRequiredPeers(runtimeDir) : []
   return {
     version,
-    usable: Boolean(parseVersion(version) && hasBin),
+    usable: Boolean(parseVersion(version) && hasBin && missingPeers.length === 0),
     hasBin,
+    missingPeers,
   }
 }
 
-/** 读取版本元数据（installed + history），文件缺失/损坏时返回空结构。 */
-function readVersionFile() {
-  try {
-    const j = JSON.parse(fs.readFileSync(VERSION_FILE, 'utf8'))
-    return { installed: typeof j.installed === 'string' ? j.installed : null, history: Array.isArray(j.history) ? j.history : [] }
-  } catch {
-    return { installed: null, history: [] }
-  }
+function writeVersionFile(data, versionFile = VERSION_FILE) {
+  fs.mkdirSync(path.dirname(versionFile), { recursive: true })
+  fs.writeFileSync(versionFile, JSON.stringify(data, null, 2) + '\n')
 }
 
-function writeVersionFile(data) {
-  fs.mkdirSync(BASE_DIR, { recursive: true })
-  fs.writeFileSync(VERSION_FILE, JSON.stringify(data, null, 2) + '\n')
+/** 把显式传入的 registry 列表映射成尝试项；未传时返回空数组。 */
+function registryAttempts(options = {}) {
+  return (options.registries ?? []).map((r) => ({ registry: r || null }))
 }
 
 /**
- * 安装指定版本（缺省 latest）。成功后更新版本元数据，
- * 把「被替换掉的旧版本」压入 history 用于回退，history 最多保留 3 个。
+ * 决定按序尝试的 npm 源：先用 `npm config get registry` 解析用户配置的源，
+ * 再补上镜像源，然后并行快速探测可达性，只保留可达源并保持优先级顺序。
+ * 全部不可达（离线）时保留原列表，让 npm 给出真实错误；避免在不可达的
+ * 官方源上白白等满超时。options 可注入 runner/probe 便于纯 Node 测试。
+ */
+async function pickRegistries(options = {}) {
+  const runner = options.runner ?? run
+  const probe = options.probe ?? probeRegistry
+  let attempts = registryAttempts(options)
+  if (attempts.length === 0) {
+    const cfg = await runner(npmCommand(), ['config', 'get', 'registry'], { timeoutMs: 10000 })
+    const userRegistry = cfg.ok ? String(cfg.out || '').trim() : null
+    if (userRegistry && ![REGISTRY_MIRROR, REGISTRY_MIRROR_ALT].some((m) => stripTrailingSlash(userRegistry) === stripTrailingSlash(m))) {
+      attempts.push({ registry: userRegistry })
+    }
+    attempts.push({ registry: REGISTRY_MIRROR }, { registry: REGISTRY_MIRROR_ALT })
+  }
+  if (options.noProbe === true) return attempts
+  const probed = await Promise.all(attempts.map(async (a) => ({
+    registry: a.registry,
+    alive: a.registry ? await probe(a.registry) : true,
+  })))
+  const alive = probed.filter((p) => p.alive).map(({ registry }) => ({ registry }))
+  if (alive.length === 0) return attempts // 全部探测失败：保持原顺序，让 npm 报错
+  return alive
+}
+
+/**
+ * 安装指定版本（缺省 latest）。先探测可达源并按序尝试，每个源一次
+ * npm install 尝试、带硬超时；全部失败返回最后一个错误。
+ * 成功后记录已装版本。options 仅用于纯 Node 测试注入临时目录/版本文件/runner。
  */
 async function installVersion(version, options = {}) {
-  ensureRuntimeDir()
+  const runtimeDir = options.runtimeDir ?? RUNTIME_DIR
+  const versionFile = options.versionFile ?? VERSION_FILE
+  const runner = options.runner ?? run
+  const log = typeof options.log === 'function' ? options.log : () => {}
+  const onProgress = typeof options.onProgress === 'function' ? options.onProgress : null
+  ensureRuntimeDir(runtimeDir)
   const target = version || 'latest'
   if (target !== 'latest' && !parseVersion(target)) return { ok: false, err: `无效的 DSH 版本：${target}` }
+  // 先清理旧版 peer 修复可能保存到根 manifest 的依赖；若本次安装失败，仍保留
+  // 当前已安装 DSH 的精确版本，离线启动不会被目标版本污染。
+  const currentVersion = installedVersion(runtimeDir)
+  writeManagedRuntimeManifest(runtimeDir, parseVersion(currentVersion) ? currentVersion : target)
   const spec = `${PKG_NAME}@${target}`
-  const args = ['install', spec]
-  if (options.force === true) args.push('--force')
-  const res = await run(npmCommand(), args, { cwd: RUNTIME_DIR })
-  if (!res.ok) return { ok: false, err: errMsg(res) }
-  const status = runtimeStatus()
-  if (!status.usable) {
-    return { ok: false, err: `npm 安装完成，但 DSH 运行时完整性校验失败：${binPath()}` }
-  }
-  const newVer = status.version
-  if (newVer) {
-    const vf = readVersionFile()
-    if (vf.installed && vf.installed !== newVer && !vf.history.includes(vf.installed)) {
-      vf.history.unshift(vf.installed)
+  const attempts = await pickRegistries(options)
+  log(`[install] 目标 ${spec}，将按序尝试：${attempts.map(sourceName).join(' → ')}`)
+  let lastErr = ''
+  const commonArgs = [
+    '--no-audit', '--no-fund', '--prefer-offline', '--loglevel=http',
+    // 网络黑洞（大文件传输卡死）时快速失败并换下一个源，而不是无限等
+    '--fetch-timeout=90000', '--fetch-retries=1',
+  ]
+  for (const attempt of attempts) {
+    const args = [
+      'install', spec,
+      ...commonArgs,
+      // 主包的大依赖树必须跳过 peer 自动解析，避免 npm 11 卡在 idealTree；
+      // 缺失 peer 会在下一阶段用一个规模更小的正常解析单独补齐。
+      '--legacy-peer-deps',
+    ]
+    if (options.force === true) args.push('--force')
+    if (attempt.registry) args.push('--registry', attempt.registry)
+    log(`[install] 正在从 ${sourceName(attempt)} 安装…`)
+    const res = await runner(npmCommand(), args, {
+      cwd: runtimeDir,
+      timeoutMs: NPM_INSTALL_TIMEOUT_MS,
+      onData: onProgress,
+    })
+    if (!res.ok) {
+      lastErr = errMsg(res)
+      log(`[install] 源 ${sourceName(attempt)} 失败：${lastErr}`)
+      if (res.terminationUnconfirmed) {
+        return stopForUnconfirmedExit(lastErr)
+      }
+      continue
     }
-    vf.history = vf.history.slice(0, 3)
-    vf.installed = newVer
-    writeVersionFile(vf)
+    let status = runtimeStatus(runtimeDir)
+    if (!parseVersion(status.version) || !status.hasBin) {
+      log('[install] 完整性校验失败')
+      return { ok: false, err: `npm 安装完成，但 DSH 运行时完整性校验失败：${binPath(runtimeDir)}` }
+    }
+    writeManagedRuntimeManifest(runtimeDir, status.version)
+    const attemptedPeers = new Set()
+    while (status.missingPeers.length > 0) {
+      const pendingPeers = status.missingPeers.filter((peer) => !attemptedPeers.has(peer.name))
+      if (pendingPeers.length === 0) {
+        lastErr = `npm 已完成，但仍缺少必需依赖：${status.missingPeers.map((peer) => peer.name).join('、')}`
+        log(`[install] peer dependency 修复失败：${lastErr}`)
+        break
+      }
+      const invalidPeers = pendingPeers.filter((peer) => peer.invalidRange || (!peer.range && !peer.installRange))
+      if (invalidPeers.length > 0) {
+        lastErr = `必需 peer dependency 的版本范围无效：${invalidPeers.map((peer) => `${peer.name}（${peer.requiredBy}）`).join('、')}`
+        log(`[install] peer dependency 范围校验失败：${lastErr}`)
+        break
+      }
+      for (const peer of pendingPeers) attemptedPeers.add(peer.name)
+      const peerSpecs = pendingPeers.map((peer) => `${peer.name}@${peer.range ?? peer.installRange}`)
+      log(`[install] 正在补装 ${pendingPeers.length} 个必需 peer dependency：${pendingPeers.map((peer) => peer.name).join('、')}`)
+      // peer 阶段不使用 legacy，让 npm 在较小的显式集合内选择互相兼容的版本；
+      // --no-save 避免把临时修复包固化为根依赖，影响后续更新。
+      const peerArgs = ['install', ...peerSpecs, ...commonArgs, '--no-save']
+      if (attempt.registry) peerArgs.push('--registry', attempt.registry)
+      const peerResult = await runner(npmCommand(), peerArgs, {
+        cwd: runtimeDir,
+        timeoutMs: NPM_INSTALL_TIMEOUT_MS,
+        onData: onProgress,
+      })
+      if (!peerResult.ok) {
+        lastErr = errMsg(peerResult)
+        log(`[install] peer dependency 补装失败：${lastErr}`)
+        if (peerResult.terminationUnconfirmed) {
+          return stopForUnconfirmedExit(lastErr)
+        }
+        break
+      }
+      status = runtimeStatus(runtimeDir)
+    }
+    if (!status.usable) continue
+    const newVer = status.version
+    if (newVer) {
+      writeVersionFile({ installed: newVer }, versionFile)
+    }
+    log(`[install] 从 ${sourceName(attempt)} 安装成功：${newVer}`)
+    return { ok: true, version: newVer }
   }
-  return { ok: true, version: newVer }
+  log('[install] 所有源均失败')
+  const names = attempts.map(sourceName).join('、')
+  return { ok: false, err: `安装失败（已尝试 ${attempts.length} 个源：${names}）。${lastErr}` }
 }
 
 /**
@@ -174,16 +574,32 @@ async function ensureRuntime(options = {}) {
 }
 
 /**
- * 向 npm registry 查 @deepseek-ai/dsh 的最新可用版本；失败（离线等）返回 null。
+ * 向 npm registry 查 @deepseek-ai/dsh 的最新可用版本；所有源都失败（离线等）
+ * 返回 null。先探测可达源，官方源超时/失败时自动回退镜像源。
  *
  * 官方把预发布版挂在 `next` 标签（如 0.1.0-rc.8），而 `latest` 标签可能停留在
  * 更旧的版本，只看 `latest` 会漏掉新预发布版；这里同时读取两个标签取较大者，
  * 与「跟随预览版最新」的意图一致。
  */
-async function latestVersion() {
-  const res = await run(npmCommand(), ['view', PKG_NAME, 'dist-tags', '--json'], {})
-  if (!res.ok) return null
-  return bestOfTags(parseDistTags(res.out))
+async function latestVersion(options = {}) {
+  const runner = options.runner ?? run
+  const log = typeof options.log === 'function' ? options.log : () => {}
+  const attempts = await pickRegistries(options)
+  for (const attempt of attempts) {
+    log(`[view] 正在从 ${sourceName(attempt)} 查询最新版本…`)
+    const args = ['view', PKG_NAME, 'dist-tags', '--json']
+    if (attempt.registry) args.push('--registry', attempt.registry)
+    const res = await runner(npmCommand(), args, { timeoutMs: NPM_VIEW_TIMEOUT_MS })
+    if (res.ok) {
+      const v = bestOfTags(parseDistTags(res.out))
+      if (v) {
+        log(`[view] 源 ${sourceName(attempt)} 返回最新版本 ${v}`)
+        return v
+      }
+    }
+  }
+  log('[view] 所有源查询失败')
+  return null
 }
 
 /** 从 npm view --json 的 stdout 中解析 dist-tags 对象；失败返回 null。 */
@@ -212,12 +628,6 @@ function bestOfTags(tags) {
   return best
 }
 
-/** 回退目标：最近一次被替换掉的版本（history 第一个）。 */
-function rollbackTarget() {
-  const target = readVersionFile().history[0]
-  return parseVersion(target) ? target : null
-}
-
 /** 解析完整的 SemVer（构建元数据不参与比较），无法解析返回 null。 */
 function parseVersion(v) {
   if (typeof v !== 'string') return null
@@ -233,34 +643,12 @@ function parseVersion(v) {
 }
 
 /**
- * 语义化版本比较：a>b 返回 1，a<b 返回 -1，相等返回 0。
- * 能区分 prerelease（`0.1.0-rc.7` < `0.1.0-rc.8` < `0.1.0`），
- * 这是「跟随预览版最新」的关键——rc 版本号也能正确判定新旧。
+ * 语义化版本比较：a>b 返回 1，a<b 返回 -1，相等或无法解析返回 0。
+ * 复用 semver 的 prerelease 比较，仅保留「无法解析返回 0」的宽容行为。
  */
 function compareVersions(a, b) {
-  const pa = parseVersion(a)
-  const pb = parseVersion(b)
-  if (!pa || !pb) return 0
-  for (const k of ['major', 'minor', 'patch']) {
-    if (pa[k] !== pb[k]) return pa[k] > pb[k] ? 1 : -1
-  }
-  if (pa.pre.length === 0 && pb.pre.length === 0) return 0
-  if (pa.pre.length === 0) return 1 // 正式版 > 任何 prerelease
-  if (pb.pre.length === 0) return -1
-  const n = Math.min(pa.pre.length, pb.pre.length)
-  for (let i = 0; i < n; i++) {
-    const x = pa.pre[i]
-    const y = pb.pre[i]
-    if (x === y) continue
-    const xNum = /^\d+$/.test(x)
-    const yNum = /^\d+$/.test(y)
-    if (xNum && yNum) return parseInt(x, 10) > parseInt(y, 10) ? 1 : -1
-    if (xNum) return -1 // 数字段 < 字母段
-    if (yNum) return 1
-    return x > y ? 1 : -1
-  }
-  if (pa.pre.length === pb.pre.length) return 0
-  return pa.pre.length > pb.pre.length ? 1 : -1
+  if (!parseVersion(a) || !parseVersion(b)) return 0
+  return semver.compare(a, b)
 }
 
 /** 读取系统 node 版本字符串（去 v 前缀）；取不到返回 null。 */
@@ -281,19 +669,25 @@ module.exports = {
   BASE_DIR,
   RUNTIME_DIR,
   VERSION_FILE,
+  REGISTRY_MIRROR,
+  REGISTRY_MIRROR_ALT,
   npmCommand,
   run,
+  killActiveChildren,
   ensureRuntime,
   installVersion,
   installedVersion,
   latestVersion,
-  rollbackTarget,
   binPath,
   runtimeStatus,
+  missingRequiredPeers,
+  isFrontendOnlyPeer,
   compareVersions,
   parseVersion,
   parseDistTags,
   bestOfTags,
+  registryAttempts,
+  pickRegistries,
   nodeVersion,
   nodeIsAvailable,
 }
