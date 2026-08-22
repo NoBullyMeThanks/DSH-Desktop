@@ -39,12 +39,27 @@ npx @deepseek-ai/dsh web
 - 应用使用由系统分配空闲端口，不固定占用 3080 等常见端口。
 - 窗口主题、语言和自绘窗口按钮跟随 DSH 设置。
 - 关闭主窗口后驻留托盘，只有选择“退出”才结束后台服务。
+- **内嵌终端面板**：应用内直接打开 PowerShell/cmd 终端（Ctrl+\`、窗口按钮或托盘入口），支持多会话、停靠到底部或右侧、拖动调整尺寸、会话重命名，随深浅色主题自动切换。
+
+## 内嵌终端
+
+终端面板是 VS Code 风格的嵌入面板：DSH 内容区之上叠加一个独立 WebContentsView，运行 xterm.js，由主进程经 node-pty（ConPTY）托管真实 shell 进程。它完全不改动 DSH 自身源码——对 DSH 页面的仅有的交互是运行时观测布局与注入内缩 padding（内存级、刷新即消失）。
+
+- **打开方式**：`Ctrl+\``、窗口控件区「终端」按钮、托盘「打开终端」。
+- **停靠**：底部（默认，35% 高度）或右侧（35% 宽度），可拖动边界调整大小，偏好持久化到 `preferences.json`。
+- **多会话**：管理区新建/切换/重命名（双击）/真正关闭（垃圾桶图标）；会话退出后保留输出并可一键重新打开。
+- **工作目录**：默认跟随 DSH 当前工作区，推断失败回退用户主目录。
+- **联动**：DSH 会话区自动为面板让位（内缩 padding）；页面出现设置面板/弹窗时终端自动收起、关闭后恢复；面板浮层跟随深浅色主题。
+- **安全**：面板沙箱 + contextIsolation，IPC 全量校验来源，DSH 页面无法触达终端通道。
 
 ## 技术实现
 
 | 技术 | 用途 |
 |---|---|
 | Electron 43 | Windows 桌面窗口、托盘、IPC 和应用生命周期 |
+| WebContentsView | 终端面板叠加视图（始终渲染在 DSH 页面之上） |
+| xterm.js 6 + addon-fit | 终端面板渲染（vendored 到 `terminal-assets/`） |
+| node-pty 1.1.0（ConPTY） | 托管真实 shell 进程（pty-host 子进程，懒安装） |
 | Node.js / CommonJS | 启动 DSH 子进程、管理文件和运行时 |
 | `@deepseek-ai/dsh` | 提供本地服务与官方 Web UI |
 | npm | 首次安装和更新 DSH 运行时 |
@@ -85,10 +100,18 @@ npm start
 各命令用途：
 
 - `npm ci`：严格按照 `package-lock.json` 安装可复现依赖，首次克隆推荐使用。
-- `npm test`：执行全部自动化测试。
+- `npm test`：执行全部自动化测试（终端纯函数、协议客户端、工作区解析等单元测试）。
 - `npm start`：以开发模式运行 `electron .`。
 
 首次启动会把 DSH 下载到 `~/.dsh-desktop/runtime/`，可能需要几十秒到几分钟。后续启动会直接复用完整的本地运行时；网络不可用时仍可使用已安装版本。
+
+打开终端面板的快捷键是 **`Ctrl+\``**（反引号），也可通过窗口控件区「终端」按钮或托盘「打开终端」。
+
+终端面板的集成冒烟（真实 PTY 会话 + 键盘输入链路 + 停靠/拖动/重命名/宿主崩溃恢复）：
+
+```powershell
+node_modules\.bin\electron.cmd scripts/electron-terminal-smoke.js
+```
 
 
 ## 数据目录
@@ -96,8 +119,9 @@ npm start
 | 路径 | 内容 |
 |---|---|
 | `~/.dsh-desktop/runtime/` | DSH-Desktop 管理的 DSH npm 运行时 |
+| `~/.dsh-desktop/pty-host/` | 终端宿主的 node-pty 安装目录（首次打开终端时懒安装） |
 | `~/.dsh-desktop/version.json` | 当前已安装的 DSH 版本 |
-| `~/.dsh-desktop/preferences.json` | 启动更新检查等桌面端偏好 |
+| `~/.dsh-desktop/preferences.json` | 启动更新检查、终端停靠等桌面端偏好 |
 | `~/.dsh-desktop/dsh.log` | 桌面启动器和 DSH 子进程日志 |
 | `~/.dsh/` | DSH 自身的凭据、设置和会话数据 |
 
@@ -116,6 +140,14 @@ update-preferences.js      自动更新偏好迁移与规范化
 settings-reader.js         DSH 主题和语言设置读取与监听
 tray.js                    系统托盘及菜单
 i18n.js                    中英文桌面端文案
+terminal-manager.js        终端面板主进程：视图、宿主生命周期、会话表、IPC
+terminal-host-client.js    pty-host 协议客户端（JSON-Lines + 超时/退出事件）
+pty-host.js                终端宿主（独立 Node 进程，运行 node-pty）
+terminal-utils.js          shell 探测、面板 bounds 计算等纯函数
+terminal.html / terminal.js / terminal-preload.js   终端面板页面
+terminal-assets/           vendored xterm.js 静态资源
+workspace-resolver.js      终端默认工作目录（DSH 工作区推断）
+scripts/                   集成冒烟与诊断脚本（electron-terminal-smoke 等）
 test/                      Node.js 自动化测试
 assets/                    应用、安装包和托盘图标
 ```
