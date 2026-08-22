@@ -11,6 +11,13 @@
    */
   const bridge = window.__terminalBridge
   const { Terminal } = window
+  // 首帧布局：HTML 静态 data-dock 恒为 bottom（回退值）。主进程 loadURL 时把
+  // 持久化的停靠模式带在查询参数里，页面加载即按正确模式渲染——否则首启
+  // 右停靠会先按 bottom 布局渲染一帧（面板顶部出现本应隐藏的水平拖动条）。
+  const dockFromQuery = new URLSearchParams(location.search).get('dock')
+  if (dockFromQuery === 'right' || dockFromQuery === 'bottom') {
+    document.body.dataset.dock = dockFromQuery
+  }
   // UMD 形态差异：xterm 核心把导出展开到全局（window.Terminal 直接是类），
   // 而 addon 的 UMD 把整个导出对象挂到全局名下（window.FitAddon.FitAddon 才是类）。
   const FitAddonCtor = (typeof window.FitAddon === 'function' ? window.FitAddon : window.FitAddon && window.FitAddon.FitAddon) || null

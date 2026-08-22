@@ -33,8 +33,15 @@ protocol.registerSchemesAsPrivileged([
   { scheme: PANEL_SCHEME, privileges: { standard: true, secure: true, supportFetchAPI: true } },
 ])
 
-/** 面板入口地址（相对引用 terminal.js 等子资源解析到同一 scheme）。 */
-const PANEL_ENTRY = `${PANEL_SCHEME}://local/terminal.html`
+/**
+ * 面板入口地址（相对引用 terminal.js 等子资源解析到同一 scheme）。
+ * 携带停靠模式查询参数：持久化停靠为 right 时，页面首帧即按右停靠布局渲染，
+ * 避免「首启右停靠却按 bottom 布局渲染、面板顶部出现水平拖动条」的错版
+ * （用户实测：切换一次停靠后才恢复，因为首个 dock-state 在页面加载前发送会丢失）。
+ */
+function panelEntry(mode) {
+  return `${PANEL_SCHEME}://local/terminal.html?dock=${mode}`
+}
 
 /** node-pty 安装目录（与 pty-host.js 的默认模块目录一致）。 */
 const PTY_HOST_DIR = path.join(runtime.BASE_DIR, 'pty-host')
@@ -301,6 +308,10 @@ function createTerminalManager({
   function setupIpc() {
     ipcMain.on('terminal:ready', (event) => {
       if (!isPanelSender(event)) return
+      // 就绪时补发停靠模式：首次 showPanel 时页面尚未加载完，早先的 dock-state
+      // 消息会丢失；不补发则首启右停靠时页面停留在 data-dock=bottom 布局，
+      // 面板顶部出现本应隐藏的水平拖动条（用户实测：切一次停靠才恢复）
+      sendToPanel('terminal:dock-state', { mode: dockMode() })
       sendAppearance()
       const state = hostClient && hostClient.alive ? 'ready' : 'starting'
       sendToPanel('terminal:host-state', { state })
@@ -378,7 +389,11 @@ function createTerminalManager({
       setDock(mode)
     })
 
-    // 面板拖动调整（相对增量；bottom 调高度、right 调宽度）
+    // 面板拖动调整（相对增量）。边界拖动条语义（与内部 #split 一致）：
+    // 右停靠的 resizeV 在面板左缘——右拖 = 左缘右移 = 面板变窄；
+    // 底部停靠的 resizeH 在面板顶缘——下拖 = 顶缘下移 = 面板变矮。
+    // 因此按「边缘跟随光标」取负增量（未取负前用户实测方向反转：
+    // 向下拖动终端反而增加了高度）。
     ipcMain.on('terminal:panel-resize', (event, payload) => {
       if (!isPanelSender(event)) return
       const dx = Number(payload && payload.dx)
@@ -389,10 +404,10 @@ function createTerminalManager({
       const [width, height] = win.getContentSize()
       if (dockMode() === 'right') {
         const base = panelWidthOverride ?? computeDockBounds(width, height).width
-        panelWidthOverride = Math.round(Math.min(Math.max(base + dx, 200), width * 0.75))
+        panelWidthOverride = Math.round(Math.min(Math.max(base - dx, 200), width * 0.75))
       } else {
         const base = panelHeightOverride ?? computeDockBounds(width, height).height
-        panelHeightOverride = Math.round(Math.min(Math.max(base + dy, 120), height * 0.85))
+        panelHeightOverride = Math.round(Math.min(Math.max(base - dy, 120), height * 0.85))
       }
       updatePanelBounds()
     })
@@ -464,7 +479,7 @@ function createTerminalManager({
     panelView.webContents.on('did-fail-load', (_event, code, description, url) => {
       log(`面板资源加载失败（${code}）${description}: ${url}`)
     })
-    panelView.webContents.loadURL(PANEL_ENTRY).catch((err) => {
+    panelView.webContents.loadURL(panelEntry(dockMode())).catch((err) => {
       log(`终端面板加载失败：${err.message}`)
     })
     return panelView

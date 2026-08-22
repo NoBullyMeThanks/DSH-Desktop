@@ -229,6 +229,10 @@
   4. 三条拖动条（resizeH/resizeV/split）悬停色从主题蓝改为深灰 `var(--drag-hover)`（浅色 `rgba(0,0,0,.28)` / 深色 `rgba(255,255,255,.28)`）。
   5. 右侧停靠面板新增 **1px 左边界线**（`body[data-dock="right"] { border-left: 1px solid var(--border) }`），与 DSH 内容区明确分隔。
   - 集成冒烟新增两项断言（右停靠左边界线已渲染、关闭按钮为 bi-trash），单测更新 headerBottom 对齐值（70 → 69）。
+- **六次修正记录（用户实测反馈）**：
+  1. **首启右停靠错版布局**：持久化停靠为 right 时首开面板，顶部出现本应是隐藏的水平拖动条（resizeH 按 bottom 布局渲染），切一次停靠才恢复——根因是首个 `terminal:dock-state` 在页面加载前发送被丢弃、HTML 静态 `data-dock` 恒为 bottom。修复双保险：① 入口 URL 带停靠查询参数（`terminal.html?dock=right`，页面首帧即按正确模式渲染）；② `terminal:ready` 时补发 dock-state（覆盖重载/崩溃恢复等场景）。
+  2. **边界拖动方向反转**：resizeH/resizeV 位于面板**顶缘/左缘**，原实现 `base + 增量` 使面板边缘反向移动（向下拖顶缘反而增高，用户实测）。改为「边缘跟随光标」取负增量（`base - dx` / `base - dy`），与内部 `#split` 的方向语义一致；冒烟的拖动断言同步翻转（右拖即变窄、上拖即增高）。
+  3. 集成冒烟截图抗抖：capturePage 偶发 `UnknownVizError`、desktopCapturer 偶发黑帧（远程会话/显示器休眠时更常见）——截图加短重试；合成像素断言仅在取到非黑帧时严格判定，连续黑帧记「环境限制跳过」而非产品失败（面板截图/bounds 断言仍全量执行）。
 
 ## 6. 风险与备选
 
