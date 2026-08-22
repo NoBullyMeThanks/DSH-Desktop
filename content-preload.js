@@ -816,10 +816,17 @@ function observeLayout(nextFrame) {
 let lastLayoutReport = null
 
 /**
- * 会话区标题区域底边线：会话区滚动体 top 即标题区域底边（header 隐藏/空会话
- * 时为 0）。右侧停靠面板据此对齐自己的 header 底边线（用户要求两线共线）。
+ * 会话区标题区域底边线：优先用会话区 <header> 元素（findConversationHeader）
+ * 的底边（精确对齐用户视角的「标题区域线条」）；header 隐藏/空会话时用
+ * 滚动体 top 兜底，再不行回退 0（右侧面板走窗口按钮区下限）。
+ * 右侧停靠面板据此使面板顶边与该线共线。
  */
 function measureHeaderBottom() {
+  const headerEl = findConversationHeader()
+  if (headerEl && headerEl.isConnected) {
+    const bottom = headerEl.getBoundingClientRect().bottom
+    if (Number.isFinite(bottom) && bottom > 0) return Math.round(bottom)
+  }
   const scroller = (scrollBody && scrollBody.isConnected) ? scrollBody : findSessionScrollBody()
   if (!scroller) return 0
   const top = scroller.getBoundingClientRect().top

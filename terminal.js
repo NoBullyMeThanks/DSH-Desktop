@@ -243,7 +243,7 @@
       const closeBtnEl = document.createElement('button')
       closeBtnEl.className = 'sclose'
       closeBtnEl.title = STR.closeSession
-      closeBtnEl.textContent = '×'
+      closeBtnEl.innerHTML = '<svg viewBox="0 0 12 12" aria-hidden="true"><path d="M2.5 3.5h7M4 3.5v-1h4v1M3.5 3.5l.5 6h4l.5-6M5 5.5v2.5M7 5.5v2.5" /></svg>'
       closeBtnEl.addEventListener('click', (event) => {
         event.stopPropagation()
         // 有意关闭：立即从 UI 移除（不等 exit 事件），再请求主进程结束会话
