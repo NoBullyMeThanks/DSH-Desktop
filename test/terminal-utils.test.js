@@ -111,11 +111,13 @@ test('computeDockBounds 右侧：宽度 35%（带上下限 clamp）', () => {
   assert.equal(narrow.width, 500 * 0.6)
 })
 
-test('computeDockBounds 右侧：headerBottom 对齐（面板 header 底边线与标题区底边线共线）', () => {
+test('computeDockBounds 右侧：面板顶边与标题区底边线对齐', () => {
   const layout = { sidebarRight: 280, contentRight: 1264, headerBottom: 70 }
   const bounds = utils.computeDockBounds(1264, 735, { dock: 'right', layout })
-  assert.equal(bounds.y, 70 - utils.PANEL_HEADER_HEIGHT) // 36
-  assert.equal(bounds.y + utils.PANEL_HEADER_HEIGHT, 70) // 面板 header 线 = 标题区底边线
+  assert.equal(bounds.y, 70) // 面板顶 = headerBottom，顶边线与标题区底线共线
+  // headerBottom 缺失 / header 隐藏 → 下限 28（窗口按钮区）
+  const fallback = utils.computeDockBounds(1264, 735, { dock: 'right' })
+  assert.equal(fallback.y, utils.RIGHT_DOCK_TOP_INSET)
 })
 
 test('panelInsetFor 按停靠模式返回内缩方向', () => {

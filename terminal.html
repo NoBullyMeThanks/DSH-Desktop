@@ -41,8 +41,26 @@
     height: 34px;
     padding: 0 10px 0 14px;
     flex: 0 0 auto;
+    /* 顶边线：右侧停靠时与 DSH 会话区标题区域的底边线共线（面板顶 = headerBottom） */
+    border-top: 1px solid var(--border);
     border-bottom: 1px solid var(--border);
   }
+  #resizeH {
+    height: 6px;
+    flex: 0 0 auto;
+    cursor: row-resize;
+    background: transparent;
+  }
+  #resizeH:hover { background: var(--accent); opacity: 0.35; }
+  body[data-dock="right"] #resizeH { display: none; }
+  #resizeV {
+    width: 6px;
+    flex: 0 0 auto;
+    cursor: col-resize;
+    background: transparent;
+  }
+  #resizeV:hover { background: var(--accent); opacity: 0.35; }
+  body:not([data-dock="right"]) #resizeV { display: none; }
   .dot {
     width: 8px;
     height: 8px;
@@ -90,6 +108,13 @@
     min-height: 0;
     display: flex;
   }
+  #split {
+    width: 6px;
+    flex: 0 0 auto;
+    cursor: col-resize;
+    background: transparent;
+  }
+  #split:hover { background: var(--accent); opacity: 0.35; }
   .stage {
     flex: 1;
     min-width: 0;
@@ -196,7 +221,8 @@
   }
 </style>
 </head>
-<body data-theme="light">
+<body data-theme="light" data-dock="bottom">
+  <div id="resizeH"></div>
   <div class="header">
     <span class="dot" id="dot"></span>
     <span class="title" id="title">终端</span>
@@ -213,7 +239,9 @@
     <button id="closeBtn" title="收起面板">✕</button>
   </div>
   <div class="main">
+    <div id="resizeV"></div>
     <div class="stage" id="stage"></div>
+    <div id="split"></div>
     <div class="sessions" id="sessions">
       <div class="sessions-empty" id="sessionsEmpty">正在连接…</div>
     </div>

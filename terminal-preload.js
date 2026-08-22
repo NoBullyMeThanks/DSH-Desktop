@@ -22,6 +22,8 @@ contextBridge.exposeInMainWorld('__terminalBridge', {
   activate: (sessionId) => ipcRenderer.send('terminal:activate', { sessionId }),
   /** 重命名会话。 */
   rename: (sessionId, name) => ipcRenderer.send('terminal:rename', { sessionId, name }),
+  /** 面板拖动调整（相对增量，主进程按停靠模式应用）。 */
+  panelResize: (payload) => ipcRenderer.send('terminal:panel-resize', payload),
   /** 请求主进程收起面板（标题栏关闭按钮）。 */
   togglePanel: () => ipcRenderer.send('terminal:toggle-panel'),
   /** 订阅主进程事件；返回取消订阅函数。 */

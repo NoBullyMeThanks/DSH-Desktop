@@ -83,6 +83,9 @@ function createTerminalManager({
   // 多会话：当前激活的会话 id（面板展示的 pane），命名序号
   let activeSessionId = null
   let sessionSequence = 0
+  // 用户拖动后的面板尺寸覆盖（null = 默认比例）；带 clamp，不持久化
+  let panelHeightOverride = null
+  let panelWidthOverride = null
   const sessions = new Map() // sessionId -> { sessionId, shell, pid, name }
 
   function log(message) {
@@ -375,6 +378,25 @@ function createTerminalManager({
       setDock(mode)
     })
 
+    // 面板拖动调整（相对增量；bottom 调高度、right 调宽度）
+    ipcMain.on('terminal:panel-resize', (event, payload) => {
+      if (!isPanelSender(event)) return
+      const dx = Number(payload && payload.dx)
+      const dy = Number(payload && payload.dy)
+      if (!Number.isFinite(dx) || !Number.isFinite(dy)) return
+      const win = getMainWindow()
+      if (!win || win.isDestroyed()) return
+      const [width, height] = win.getContentSize()
+      if (dockMode() === 'right') {
+        const base = panelWidthOverride ?? computeDockBounds(width, height).width
+        panelWidthOverride = Math.round(Math.min(Math.max(base + dx, 200), width * 0.75))
+      } else {
+        const base = panelHeightOverride ?? computeDockBounds(width, height).height
+        panelHeightOverride = Math.round(Math.min(Math.max(base + dy, 120), height * 0.85))
+      }
+      updatePanelBounds()
+    })
+
     // DSH 页面布局观测（content-preload 上报，只校验 sender 与数值）
     ipcMain.on('dsh:content-layout', (event, payload) => {
       const win = getMainWindow()
@@ -455,7 +477,12 @@ function createTerminalManager({
 
   /** 按停靠模式与 DSH 会话区域几何计算面板 bounds（纯函数在 terminal-utils）。 */
   function computeDockBounds(width, height) {
-    return utils.computeDockBounds(width, height, { dock: dockMode(), layout })
+    return utils.computeDockBounds(width, height, {
+      dock: dockMode(),
+      layout,
+      panelHeight: panelHeightOverride,
+      panelWidth: panelWidthOverride,
+    })
   }
 
   /** 面板对 DSH 会话区滚动体的内缩：bottom 模式压底部，right 模式压右侧。 */

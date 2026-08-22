@@ -196,19 +196,31 @@ async function main() {
     const [cw, ch] = win.getContentSize()
     const panelH = Math.min(Math.max(Math.round(ch * 0.35), 160), Math.round(ch * 0.7))
     const panelW = Math.round(Math.min(Math.max(cw * 0.35, 320), cw * 0.6))
-    // headerBottom=70：右侧面板 y = max(28, 70-34) = 36，面板 header 底边线（36+34=70）与标题区底边线共线
+    // headerBottom=70：右侧面板顶边 y = max(28, 70) = 70（面板顶 = 标题区底边线，面板 header 顶边有线）
     await win.webContents.executeJavaScript(`window.__probe.sendLayout({ sidebarRight: 240, contentRight: ${cw}, headerBottom: 70 })`)
     await sleep(300)
     await assertBounds({ x: 240, y: ch - panelH, width: cw - 240, height: panelH }, '贴齐会话区域')
     manager.setDock('right')
     await sleep(300)
-    await assertBounds({ x: cw - panelW, y: 36, width: panelW, height: ch - 36 }, '右侧停靠（顶部与标题区底边线对齐）')
+    await assertBounds({ x: cw - panelW, y: 70, width: panelW, height: ch - 70 }, '右侧停靠（面板顶边与标题区底边线对齐）')
     const insetRight = await win.webContents.executeJavaScript('({ b: Number(document.body.dataset.insetBottom || "0"), r: Number(document.body.dataset.insetRight || "0") })')
     if (insetRight.r === panelW && insetRight.b === 0) pass(`右侧内缩已下发：right=${panelW}px`)
     else fail(`右侧内缩值不符：${JSON.stringify(insetRight)}，期望 right=${panelW},bottom=0`)
+    // 拖动调整：右侧模式向左拖 60px → 宽度变小；反向恢复
+    await panel.webContents.executeJavaScript('window.__terminalBridge.panelResize({ dx: -60, dy: 0 })')
+    await sleep(300)
+    await assertBounds({ x: cw - (panelW - 60), y: 70, width: panelW - 60, height: ch - 70 }, '右侧拖动调整宽度')
+    await panel.webContents.executeJavaScript('window.__terminalBridge.panelResize({ dx: 60, dy: 0 })')
+    await sleep(300)
     manager.setDock('bottom')
     await sleep(300)
     await assertBounds({ x: 240, y: ch - panelH, width: cw - 240, height: panelH }, '恢复底部停靠')
+    // 拖动调整：底部模式向下拖 80px → 高度变大；反向恢复
+    await panel.webContents.executeJavaScript('window.__terminalBridge.panelResize({ dx: 0, dy: 80 })')
+    await sleep(300)
+    await assertBounds({ x: 240, y: ch - (panelH + 80), width: cw - 240, height: panelH + 80 }, '底部拖动调整高度')
+    await panel.webContents.executeJavaScript('window.__terminalBridge.panelResize({ dx: 0, dy: -80 })')
+    await sleep(300)
     const inset = await win.webContents.executeJavaScript('({ b: Number(document.body.dataset.insetBottom || "0"), r: Number(document.body.dataset.insetRight || "0") })')
     if (inset.b === panelH && inset.r === 0) pass(`面板内缩已下发：bottom=${inset.b}px`)
     else fail(`面板内缩值不符：${JSON.stringify(inset)}，期望 bottom=${panelH},right=0`)
@@ -410,7 +422,12 @@ async function main() {
         const item = document.querySelectorAll('.session-item')[0]
         const nameEl = item.querySelector('.sname')
         nameEl.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))
+      })()`)
+      await sleep(300) // 编辑态重渲染
+      await panel3.webContents.executeJavaScript(`(() => {
+        const item = document.querySelectorAll('.session-item')[0]
         const input = item.querySelector('.sname-input')
+        if (!input) return
         input.value = 'dev-shell'
         input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
       })()`)

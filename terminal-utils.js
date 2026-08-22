@@ -85,21 +85,29 @@ function computeDockBounds(width, height, options = {}) {
     ? Math.min(Math.max(layout.sidebarRight, 0), contentRight)
     : 0
   if (dock === 'right') {
-    const panelWidth = Math.round(Math.min(
+    // 拖动后的宽度可覆盖默认比例（panelWidth），clamp 到 [200, 75%]
+    const defaultWidth = Math.round(Math.min(
       Math.max(width * RIGHT_DOCK_RATIO, RIGHT_DOCK_MIN_WIDTH),
       width * RIGHT_DOCK_MAX_RATIO,
     ))
-    // 顶部让位：≥ 窗口按钮区（28px），且让面板 header 底边线与 DSH 会话区
-    // 标题区域的底边线共线（headerBottom 缺失时用下限兜底）
+    const panelWidth = Number.isFinite(Number(options.panelWidth)) && Number(options.panelWidth) > 0
+      ? Math.round(Math.min(Math.max(Number(options.panelWidth), 200), width * 0.75))
+      : defaultWidth
+    // 顶部让位：≥ 窗口按钮区（28px），且**面板顶边**与 DSH 会话区标题区域的
+    // 底边线共线（headerBottom 缺失时用下限兜底）；面板 header 顶边有边框线，
+    // 两条横线视觉连续。
     const headerBottom = layout && Number.isFinite(layout.headerBottom)
       ? Math.max(0, layout.headerBottom)
       : 0
-    const topY = Math.max(RIGHT_DOCK_TOP_INSET, headerBottom - PANEL_HEADER_HEIGHT)
+    const topY = Math.max(RIGHT_DOCK_TOP_INSET, headerBottom)
     return { x: width - panelWidth, y: topY, width: panelWidth, height: height - topY }
   }
   // 底部：贴齐会话区域（侧栏右缘 → 内容右缘），侧栏收缩时自动延伸
   const panelWidth = Math.max(contentRight - sidebarRight, 0)
-  const panelHeight = computePanelBounds(panelWidth, height).height
+  // 拖动后的高度可覆盖默认比例（panelHeight），clamp 到 [120, 85%]
+  const panelHeight = Number.isFinite(Number(options.panelHeight)) && Number(options.panelHeight) > 0
+    ? Math.round(Math.min(Math.max(Number(options.panelHeight), 120), height * 0.85))
+    : computePanelBounds(panelWidth, height).height
   return { x: sidebarRight, y: height - panelHeight, width: panelWidth, height: panelHeight }
 }
 

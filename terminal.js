@@ -211,6 +211,10 @@
 
   // ── 管理区列表 ──────────────────────────────────────────────────────────────
 
+  // 编辑态会话 id：以状态驱动渲染（双击与列表重建存在 DOM 竞态——click 会触发
+  // activatePane 重建列表使旧 nameEl 脱离文档，编辑框必须由渲染器生成）
+  let editingSessionId = null
+
   function renderSessionsList(activeId) {
     sessionsEl.querySelectorAll('.session-item').forEach((item) => item.remove())
     const items = Array.from(panes.values())
@@ -243,6 +247,7 @@
       closeBtnEl.addEventListener('click', (event) => {
         event.stopPropagation()
         // 有意关闭：立即从 UI 移除（不等 exit 事件），再请求主进程结束会话
+        if (editingSessionId === entry.sessionId) editingSessionId = null
         removePane(entry.sessionId)
         renderSessionsList(activeSessionId)
         bridge.kill(entry.sessionId)
@@ -253,49 +258,46 @@
       item.appendChild(closeBtnEl)
 
       item.addEventListener('click', () => {
-        if (entry.exited) return
+        if (entry.exited || editingSessionId) return
         activatePane(entry.sessionId)
         bridge.activate(entry.sessionId)
       })
       nameEl.addEventListener('dblclick', (event) => {
         event.stopPropagation()
-        startRename(item, nameEl, entry)
+        if (entry.exited) return
+        editingSessionId = entry.sessionId
+        renderSessionsList(entry.sessionId)
       })
 
       sessionsEl.appendChild(item)
-    }
-  }
 
-  /** 双击重命名：名称换成输入框，Enter 提交 / Esc 取消 / 失焦提交。 */
-  function startRename(item, nameEl, entry) {
-    if (entry.exited) return
-    const input = document.createElement('input')
-    input.className = 'sname-input'
-    input.value = sessionNames.get(entry.sessionId) || STR.title
-    item.replaceChild(input, nameEl)
-    input.focus()
-    input.select()
-    let done = false
-    const commit = () => {
-      if (done) return
-      done = true
-      const name = input.value.trim().slice(0, 32)
-      if (name && name !== sessionNames.get(entry.sessionId)) {
-        sessionNames.set(entry.sessionId, name)
-        bridge.rename(entry.sessionId, name)
+      // 编辑态：渲染输入框（状态驱动，避免与重建竞态）
+      if (editingSessionId === entry.sessionId) {
+        const input = document.createElement('input')
+        input.className = 'sname-input'
+        input.value = sessionNames.get(entry.sessionId) || STR.title
+        item.replaceChild(input, nameEl)
+        input.focus()
+        input.select()
+        let settled = false
+        const finish = (commit) => {
+          if (settled) return
+          settled = true
+          const name = commit ? input.value.trim().slice(0, 32) : ''
+          if (commit && name && name !== sessionNames.get(entry.sessionId)) {
+            sessionNames.set(entry.sessionId, name)
+            bridge.rename(entry.sessionId, name)
+          }
+          editingSessionId = null
+          renderSessionsList(activeSessionId)
+        }
+        input.addEventListener('keydown', (event) => {
+          if (event.key === 'Enter') finish(true)
+          else if (event.key === 'Escape') finish(false)
+        })
+        input.addEventListener('blur', () => finish(true))
       }
-      renderSessionsList(entry.sessionId)
     }
-    const cancel = () => {
-      if (done) return
-      done = true
-      renderSessionsList(entry.sessionId)
-    }
-    input.addEventListener('keydown', (event) => {
-      if (event.key === 'Enter') commit()
-      else if (event.key === 'Escape') cancel()
-    })
-    input.addEventListener('blur', commit)
   }
 
   // ── 状态与文案 ──────────────────────────────────────────────────────────────
@@ -396,12 +398,63 @@
   })
   bridge.on('terminal:dock-state', ({ mode }) => {
     const right = mode === 'right'
+    document.body.dataset.dock = right ? 'right' : 'bottom'
     dockBottomBtn.classList.toggle('active', !right)
     dockRightBtn.classList.toggle('active', right)
     // 停靠切换后尺寸立即适配（ResizeObserver 有 100ms 防抖，不足以消除切换瞬间的裁切闪现）
     const entry = panes.get(activeSessionId)
     if (entry) fitPane(entry)
   })
+
+  // ── 拖动调整 ────────────────────────────────────────────────────────────────
+
+  const resizeH = document.getElementById('resizeH')
+  const resizeV = document.getElementById('resizeV')
+  const split = document.getElementById('split')
+
+  // 面板尺寸拖动（resizeH/resizeV）：相对增量上报，主进程按停靠模式应用
+  let panelResizeDrag = null // { lastX, lastY, lastSentAt }
+  const startPanelResize = (event) => {
+    panelResizeDrag = { lastX: event.clientX, lastY: event.clientY, lastSentAt: 0 }
+    event.preventDefault()
+    document.addEventListener('pointermove', onPanelResizeMove)
+    document.addEventListener('pointerup', endPanelResize, { once: true })
+  }
+  const onPanelResizeMove = (event) => {
+    if (!panelResizeDrag) return
+    const now = Date.now()
+    if (now - panelResizeDrag.lastSentAt < 30) return
+    panelResizeDrag.lastSentAt = now
+    const dx = event.clientX - panelResizeDrag.lastX
+    const dy = event.clientY - panelResizeDrag.lastY
+    panelResizeDrag.lastX = event.clientX
+    panelResizeDrag.lastY = event.clientY
+    if (dx !== 0 || dy !== 0) bridge.panelResize({ dx, dy })
+  }
+  const endPanelResize = () => {
+    panelResizeDrag = null
+    document.removeEventListener('pointermove', onPanelResizeMove)
+  }
+  resizeH.addEventListener('pointerdown', startPanelResize)
+  resizeV.addEventListener('pointerdown', startPanelResize)
+
+  // 管理区宽度拖动（页面本地，120–340px）
+  let splitDrag = null // { startWidth, startX }
+  split.addEventListener('pointerdown', (event) => {
+    splitDrag = { startWidth: sessionsEl.getBoundingClientRect().width, startX: event.clientX }
+    event.preventDefault()
+    document.addEventListener('pointermove', onSplitMove)
+    document.addEventListener('pointerup', endSplit, { once: true })
+  })
+  const onSplitMove = (event) => {
+    if (!splitDrag) return
+    const width = Math.min(Math.max(splitDrag.startWidth - (event.clientX - splitDrag.startX), 120), 340)
+    sessionsEl.style.width = `${width}px`
+  }
+  const endSplit = () => {
+    splitDrag = null
+    document.removeEventListener('pointermove', onSplitMove)
+  }
 
   // ── 本地交互 ────────────────────────────────────────────────────────────────
 
