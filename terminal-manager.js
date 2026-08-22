@@ -76,6 +76,7 @@ function createTerminalManager({
   let panelView = null
   let panelVisible = false
   let resizeTimer = null
+  let insetTimer = null
   let hostClient = null
   let hostEnsurePromise = null
   let hostStarting = null
@@ -516,14 +517,25 @@ function createTerminalManager({
     win.webContents.send('dsh:panel-inset', panelInset())
   }
 
+  /**
+   * 内缩下发改 150ms 尾随防抖：拖动边界时 bounds 以 ~60Hz 变化，若每次
+   * 都注入 padding，DSH 会话区布局会被以同样频率反复重排（用户实测抖动）。
+   * 拖动期间会话区保持静止、松手后一次到位；hidePanel/showPanel 仍即时下发。
+   */
+  function schedulePanelInset() {
+    clearTimeout(insetTimer)
+    insetTimer = setTimeout(sendPanelInset, 150)
+  }
+
   function updatePanelBounds() {
     if (!panelView || panelView.webContents.isDestroyed()) return
     const win = getMainWindow()
     if (!win || win.isDestroyed()) return
     const [width, height] = win.getContentSize()
     panelView.setBounds(computeDockBounds(width, height))
-    sendPanelInset()
-    // 尺寸变化后由页面 ResizeObserver 重新上报 cols/rows（M3 接 xterm fit）
+    schedulePanelInset()
+    // 尺寸变化后由页面 ResizeObserver 重新上报 cols/rows（M3 接 xterm fit；
+    // 拖动期间页面会挂起重排，松手后统一 fit）
   }
 
   function schedulePanelResize() {
@@ -618,6 +630,10 @@ function createTerminalManager({
     if (resizeTimer) {
       clearTimeout(resizeTimer)
       resizeTimer = null
+    }
+    if (insetTimer) {
+      clearTimeout(insetTimer)
+      insetTimer = null
     }
     if (!hostClient) return
     const client = hostClient

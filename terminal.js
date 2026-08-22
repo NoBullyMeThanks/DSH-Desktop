@@ -118,6 +118,9 @@
   const sessionNames = new Map() // 广播数据里的名称（管理区展示）
   let activeSessionId = null
   let currentDark = false
+  // 面板边界拖动进行中：挂起 xterm 重排与 PTY resize（拖动结束统一 fit），
+  // 否则 bounds 每次变化都触发 xterm 重排，拖动中文字块反复跳动
+  let resizingPanel = false
 
   // ── 终端实例 ────────────────────────────────────────────────────────────────
 
@@ -207,11 +210,13 @@
 
   if (typeof ResizeObserver !== 'undefined') {
     new ResizeObserver(() => {
+      if (resizingPanel) return // 拖动期间 xterm 重排挂起，pointerup 后统一 fit
       const entry = panes.get(activeSessionId)
       if (entry) scheduleFitPane(entry)
     }).observe(stage)
   }
   window.addEventListener('resize', () => {
+    if (resizingPanel) return
     const entry = panes.get(activeSessionId)
     if (entry) scheduleFitPane(entry)
   })
@@ -421,39 +426,53 @@
   const resizeV = document.getElementById('resizeV')
   const split = document.getElementById('split')
 
-  // 面板尺寸拖动（resizeH/resizeV）：相对增量上报，主进程按停靠模式应用
-  let panelResizeDrag = null // { lastX, lastY, lastSentAt }
+  // 面板尺寸拖动（resizeH/resizeV）：相对增量上报，主进程按停靠模式应用。
+  // 拖动计算必须用 screenX/screenY（屏幕绝对坐标）而非 clientX/clientY：
+  // 拖动条在面板边缘，边缘跟随光标移动，面板坐标系原点随之平移，clientX
+  // 增量会被「吃掉」（实测光标走 1cm 边界只走约 0.5cm 且来回抖动）；
+  // 屏幕坐标与面板位置无关，增量恒等于光标实际位移。setPointerCapture
+  // 保证光标短暂离开拖动条/面板视图时事件流不中断。
+  let panelResizeDrag = null // { lastX, lastY }
   const startPanelResize = (event) => {
-    panelResizeDrag = { lastX: event.clientX, lastY: event.clientY, lastSentAt: 0 }
+    try { event.currentTarget.setPointerCapture(event.pointerId) } catch {}
+    panelResizeDrag = { lastX: event.screenX, lastY: event.screenY }
+    resizingPanel = true
     event.preventDefault()
     document.addEventListener('pointermove', onPanelResizeMove)
     document.addEventListener('pointerup', endPanelResize, { once: true })
+    document.addEventListener('pointercancel', endPanelResize, { once: true })
   }
   const onPanelResizeMove = (event) => {
     if (!panelResizeDrag) return
-    const now = Date.now()
-    if (now - panelResizeDrag.lastSentAt < 30) return
-    panelResizeDrag.lastSentAt = now
-    const dx = event.clientX - panelResizeDrag.lastX
-    const dy = event.clientY - panelResizeDrag.lastY
-    panelResizeDrag.lastX = event.clientX
-    panelResizeDrag.lastY = event.clientY
+    const dx = event.screenX - panelResizeDrag.lastX
+    const dy = event.screenY - panelResizeDrag.lastY
+    panelResizeDrag.lastX = event.screenX
+    panelResizeDrag.lastY = event.screenY
     if (dx !== 0 || dy !== 0) bridge.panelResize({ dx, dy })
   }
   const endPanelResize = () => {
     panelResizeDrag = null
+    resizingPanel = false
     document.removeEventListener('pointermove', onPanelResizeMove)
+    // 拖动结束：几何已定格（最后的 setBounds 由主进程完成并触发一次 observer），
+    // 补一次 fit/PTY resize（拖动期间被挂起）
+    const entry = panes.get(activeSessionId)
+    if (entry) scheduleFitPane(entry)
   }
   resizeH.addEventListener('pointerdown', startPanelResize)
   resizeV.addEventListener('pointerdown', startPanelResize)
 
-  // 管理区宽度拖动（页面本地，120–340px）
+  // 管理区宽度拖动（页面本地，120–340px）：同步应用到 DOM，天然跟手；
+  // 同样加 pointer capture，光标滑出窄条时不中断（用 clientX 无碍——
+  // 面板视口原点不随管理区宽度变化）
   let splitDrag = null // { startWidth, startX }
   split.addEventListener('pointerdown', (event) => {
+    try { split.setPointerCapture(event.pointerId) } catch {}
     splitDrag = { startWidth: sessionsEl.getBoundingClientRect().width, startX: event.clientX }
     event.preventDefault()
     document.addEventListener('pointermove', onSplitMove)
     document.addEventListener('pointerup', endSplit, { once: true })
+    document.addEventListener('pointercancel', endSplit, { once: true })
   })
   const onSplitMove = (event) => {
     if (!splitDrag) return

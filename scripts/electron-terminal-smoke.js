@@ -203,10 +203,17 @@ async function main() {
     manager.setDock('right')
     await sleep(300)
     await assertBounds({ x: cw - panelW, y: 69, width: panelW, height: ch - 69 }, '右侧停靠（面板顶边线与标题区底边线重合）')
-    // 右停靠时面板左侧应有 1px 边界线（与 DSH 内容区分开）
-    const leftBorderWidth = await panel.webContents.executeJavaScript('getComputedStyle(document.body).borderLeftWidth')
-    if (leftBorderWidth === '1px') pass('右侧停靠：面板左边界线已渲染')
-    else fail(`右侧停靠：面板左边界线宽度为 ${leftBorderWidth}，期望 1px`)
+    // 右停靠时面板左侧应有 1px 边界线（与 DSH 内容区分开）。
+    // 分数缩放显示下渲染器可能把 1px 折算成 0.67px 之类的小数值
+    // （仍是 1 物理像素的线），只断言「明显非零」并输出原始值供诊断。
+    const borderInfo = await panel.webContents.executeJavaScript(`(() => ({
+      width: getComputedStyle(document.body).borderLeftWidth,
+      dpr: window.devicePixelRatio,
+      zoom: window.visualViewport ? window.visualViewport.scale : null,
+    }))()`)
+    const borderPx = Number.parseFloat(borderInfo.width)
+    if (borderPx > 0.4) pass(`右侧停靠：面板左边界线已渲染（${borderInfo.width}，dpr=${borderInfo.dpr}）`)
+    else fail(`右侧停靠：面板左边界线宽度异常：${JSON.stringify(borderInfo)}`)
     const insetRight = await win.webContents.executeJavaScript('({ b: Number(document.body.dataset.insetBottom || "0"), r: Number(document.body.dataset.insetRight || "0") })')
     if (insetRight.r === panelW && insetRight.b === 0) pass(`右侧内缩已下发：right=${panelW}px`)
     else fail(`右侧内缩值不符：${JSON.stringify(insetRight)}，期望 right=${panelW},bottom=0`)
@@ -314,7 +321,7 @@ async function main() {
             types: ['window'],
             thumbnailSize: { width: 1200, height: 800 },
           })
-          const source = sources.find((s) => s.id === `window:${win.id}`) || sources[0]
+          const source = sources.find((s) => s.id === `window:${win.id}`)
           if (source && !source.thumbnail.isEmpty()) {
             const mainPath = SCREENSHOT_PATH.replace('panel.png', 'main.png')
             fs.writeFileSync(mainPath, source.thumbnail.toPNG())
@@ -333,7 +340,10 @@ async function main() {
               compositeOk = !lastCaptureBlack && near(r, expectedBg[0]) && near(g, expectedBg[1]) && near(b, expectedBg[2])
             }
           } else {
-            lastPixel = '无可用缩略图'
+            // 严格按窗口 id 匹配源（绝不回退到 sources[0]：可能采到用户的其他窗口，
+            // 造成与产品无关的误报）；找不到本窗口 = 采不到，按环境跳过处理
+            lastPixel = `未找到窗口源 window:${win.id}（共 ${sources.length} 个源：${sources.map((s) => s.id).join(', ')}）`
+            lastCaptureBlack = true
           }
           if (!lastCaptureBlack && !compositeOk) {
             process.stdout.write(`[smoke-ipc] 主窗口合成截图第 ${attempt + 1} 次采样 ${lastPixel}，不匹配期望 ${expectedBg.join(',')}，重试\n`)

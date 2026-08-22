@@ -233,6 +233,11 @@
   1. **首启右停靠错版布局**：持久化停靠为 right 时首开面板，顶部出现本应是隐藏的水平拖动条（resizeH 按 bottom 布局渲染），切一次停靠才恢复——根因是首个 `terminal:dock-state` 在页面加载前发送被丢弃、HTML 静态 `data-dock` 恒为 bottom。修复双保险：① 入口 URL 带停靠查询参数（`terminal.html?dock=right`，页面首帧即按正确模式渲染）；② `terminal:ready` 时补发 dock-state（覆盖重载/崩溃恢复等场景）。
   2. **边界拖动方向反转**：resizeH/resizeV 位于面板**顶缘/左缘**，原实现 `base + 增量` 使面板边缘反向移动（向下拖顶缘反而增高，用户实测）。改为「边缘跟随光标」取负增量（`base - dx` / `base - dy`），与内部 `#split` 的方向语义一致；冒烟的拖动断言同步翻转（右拖即变窄、上拖即增高）。
   3. 集成冒烟截图抗抖：capturePage 偶发 `UnknownVizError`、desktopCapturer 偶发黑帧（远程会话/显示器休眠时更常见）——截图加短重试；合成像素断言仅在取到非黑帧时严格判定，连续黑帧记「环境限制跳过」而非产品失败（面板截图/bounds 断言仍全量执行）。
+- **七次修正记录（拖动顺滑性，用户实测反馈）**：边界拖动（resizeH/resizeV）「不跟手 + 抖动」根因与修法：
+  1. **坐标系反馈环（0.5cm 根因）**：拖动计算原用 `clientX/clientY`（面板页面视口坐标），而拖动条在面板边缘、边缘又跟随光标移动——面板原点每次平移把下一个增量「吃掉」（实测光标走 1cm 边界只走约 0.5cm 且来回顿挫）。改用 `screenX/screenY`（屏幕绝对坐标，与面板位置无关）后增量恒等于光标真实位移；同时**去掉 30ms 发送节流**、`setPointerCapture` + `pointercancel` 兜底，光标短暂出界/出视图不丢事件流。管理区 `#split` 本就同步直接改 DOM 且视口原点不移动，方向与跟手均正确，仅补了 pointer capture。
+  2. **会话区抖动**：拖动期间每次 bounds 变化都即时 `dsh:panel-inset`，DSH 会话区以 ~33Hz 反复重排 → 改 **150ms 尾随防抖**（拖动中会话区静止、松手一次到位；隐藏/显示/停靠切换仍即时下发）。
+  3. **终端区抖动**：拖动中 `ResizeObserver` 反复触发 xterm `fit()`/PTY resize（~10Hz 文字重排）→ 拖动期间挂起重排（`resizingPanel` 标志，observer/窗口 resize 监听均跳过），`pointerup` 后统一补一次 fit。
+  - 冒烟健壮性：① 边界线断言放宽为「明显非零」——150% 分数缩放下渲染器会把 1px 折算成 0.666667px（仍是 1 物理像素线），原 `=== '1px'` 会误报；② desktopCapturer 源**严格按窗口 id 匹配、绝不回退 sources[0]**（曾采到用户其他窗口造成误报），采不到本窗口记环境跳过。
 
 ## 6. 风险与备选
 
