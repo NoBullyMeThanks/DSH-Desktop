@@ -183,6 +183,14 @@ async function main() {
       status: document.getElementById('status') ? document.getElementById('status').textContent : '(no status)',
     })`)
     process.stdout.write(`[smoke-ipc] 页面状态：${JSON.stringify(pageState)}\n`)
+    // 诊断：viewport 背景必须随主题（xterm.css 缺省纯黑会在屏幕层下方露出黑色横条）
+    const vpBg = await panel.webContents.executeJavaScript(`(() => {
+      const vp = document.querySelector('.xterm-viewport')
+      return vp ? getComputedStyle(vp).backgroundColor : 'no-viewport'
+    })()`)
+    if (vpBg === 'rgb(0, 0, 0)') fail(`viewport 背景仍为纯黑：${vpBg}`)
+    else if (vpBg === 'no-viewport') fail('未找到 .xterm-viewport')
+    else pass(`viewport 背景已主题化：${vpBg}`)
 
     // 2.5 停靠与布局联动：模拟 DSH 页面布局上报 → 面板贴齐会话区域
     const [cw, ch] = win.getContentSize()
@@ -261,6 +269,12 @@ async function main() {
       // 主窗口合成截图：面板应盖在主内容底部（验证视图层叠顺序）。
       // webContents.capturePage 拿不到子视图合成结果，改用 desktopCapturer 截真实窗口。
       try {
+        // 期望值：面板当前主题背景色（面板已跟随深浅色，不再固定白色）
+        const expectedBg = await panel2.webContents.executeJavaScript(`(() => {
+          const s = getComputedStyle(document.getElementById('terminal')).backgroundColor
+          const m = s.match(/rgba?\\((\\d+), (\\d+), (\\d+)/)
+          return m ? [Number(m[1]), Number(m[2]), Number(m[3])] : [255, 255, 255]
+        })()`)
         const sources = await desktopCapturer.getSources({
           types: ['window'],
           thumbnailSize: { width: 1200, height: 800 },
@@ -270,7 +284,7 @@ async function main() {
           const mainPath = SCREENSHOT_PATH.replace('panel.png', 'main.png')
           fs.writeFileSync(mainPath, source.thumbnail.toPNG())
           pass(`主窗口合成截图已保存：${mainPath}`)
-          // 像素级验证：底部 10% 区域应为面板的浅色（主内容冒烟页是深色 #151517）
+          // 像素级验证：底部 10% 区域应为面板的主题背景色（主内容冒烟页是深色 #151517）
           const size = source.thumbnail.getSize()
           const bitmap = source.thumbnail.toBitmap() // BGRA
           if (size.width > 0 && bitmap && bitmap.length > 0) {
@@ -278,10 +292,11 @@ async function main() {
             const sampleY = Math.floor(size.height * 0.9)
             const idx = (sampleY * size.width + sampleX) * 4
             const [b, g, r] = [bitmap[idx], bitmap[idx + 1], bitmap[idx + 2]]
-            if (r > 200 && g > 200 && b > 200) {
-              pass(`主窗口底部像素为浅色（RGB ${r},${g},${b}），面板已合成到窗口上`)
+            const near = (a, b2) => Math.abs(a - b2) <= 4
+            if (near(r, expectedBg[0]) && near(g, expectedBg[1]) && near(b, expectedBg[2])) {
+              pass(`主窗口底部像素为主题背景色 RGB ${r},${g},${b}（期望 ${expectedBg.join(',')}），面板已合成`)
             } else {
-              fail(`主窗口底部像素非浅色（RGB ${r},${g},${b}），面板可能未合成`)
+              fail(`主窗口底部像素不符：RGB ${r},${g},${b}，期望 ${expectedBg.join(',')}，面板可能未合成`)
             }
           }
         } else {

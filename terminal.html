@@ -99,6 +99,10 @@
   }
   #terminal .xterm .xterm-viewport {
     scrollbar-width: thin;
+    /* xterm.css 缺省把 viewport 背景写成纯黑且它比屏幕层高几个像素——
+       底部露出的黑色区域就是黑色横条（用户实测两种停靠都有）。
+       改为随主题背景色，与显示区域融为一体。 */
+    background-color: var(--term-bg, #ffffff) !important;
   }
   #status {
     padding: 3px 14px;
