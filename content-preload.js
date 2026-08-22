@@ -39,7 +39,7 @@ function ensureDialogUi() {
   if (dialogRoot || !document.body) return
 
   dialogHost = document.createElement('div')
-  dialogHost.id = 'dsh-desktop-dialog-host'
+  dialogHost.id = 'dshdesktop-dialog-host'
   Object.assign(dialogHost.style, {
     position: 'fixed',
     inset: '0',
@@ -52,9 +52,9 @@ function ensureDialogUi() {
     <style>
       :host {
         all: initial;
-        --dsh-desktop-secondary-label: var(--dsw-alias-label-primary, #171717);
-        --dsh-desktop-primary-label: var(--dsw-alias-button-primary-label, #ffffff);
-        --dsh-desktop-danger-label: var(--dsw-alias-label-error, #d64545);
+        --dshdesktop-secondary-label: var(--dsw-alias-label-primary, #171717);
+        --dshdesktop-primary-label: var(--dsw-alias-button-primary-label, #ffffff);
+        --dshdesktop-danger-label: var(--dsw-alias-label-error, #d64545);
         color: var(--dsw-alias-label-primary, #171717);
         font-family: var(--dsw-font-family, "Segoe UI Variable", "Segoe UI", "Microsoft YaHei UI", sans-serif);
       }
@@ -177,7 +177,7 @@ function ensureDialogUi() {
         min-width: 80px;
         height: 36px;
         padding: 0 16px;
-        color: var(--dsh-desktop-secondary-label);
+        color: var(--dshdesktop-secondary-label);
         background: var(--dsw-alias-button-secondary-fill, rgba(0, 0, 0, 0.055));
         border: 1px solid var(--dsw-alias-border-l1, transparent);
         border-radius: 10px;
@@ -189,7 +189,7 @@ function ensureDialogUi() {
         background: var(--dsw-alias-button-secondary-fill-hover, rgba(0, 0, 0, 0.09));
       }
       button[data-kind='primary'] {
-        color: var(--dsh-desktop-primary-label);
+        color: var(--dshdesktop-primary-label);
         background: var(--dsw-alias-button-primary-fill, #4d6bfe);
         border-color: transparent;
       }
@@ -197,7 +197,7 @@ function ensureDialogUi() {
         background: var(--dsw-alias-button-primary-fill-hover, #405de5);
       }
       button[data-kind='danger'] {
-        color: var(--dsh-desktop-danger-label);
+        color: var(--dshdesktop-danger-label);
         border-color: color-mix(in srgb, var(--dsw-alias-label-error, #d64545) 55%, transparent);
       }
       button:disabled { opacity: 0.55; cursor: default; }
@@ -356,17 +356,17 @@ function syncDialogButtonContrast() {
   const secondaryBackgrounds = ['secondary-fill', 'secondary-fill-hover'].map(background).filter(Boolean)
   if (primaryBackgrounds.length > 0) {
     setDialogLabelProperty(
-      '--dsh-desktop-primary-label',
+      '--dshdesktop-primary-label',
       chooseReadableLabel(dialogProbeColor('primary-label'), primaryBackgrounds),
     )
   }
   if (secondaryBackgrounds.length > 0) {
     setDialogLabelProperty(
-      '--dsh-desktop-secondary-label',
+      '--dshdesktop-secondary-label',
       chooseReadableLabel(dialogProbeColor('label-primary'), secondaryBackgrounds),
     )
     setDialogLabelProperty(
-      '--dsh-desktop-danger-label',
+      '--dshdesktop-danger-label',
       chooseReadableLabel(dialogProbeColor('label-error'), secondaryBackgrounds),
     )
   }
@@ -493,7 +493,7 @@ function ensureWindowControls() {
   if (windowControlsRoot || !document.body) return
 
   windowControlsHost = document.createElement('div')
-  windowControlsHost.id = 'dsh-desktop-window-controls-host'
+  windowControlsHost.id = 'dshdesktop-window-controls-host'
   Object.assign(windowControlsHost.style, {
     position: 'fixed',
     top: '0',
@@ -612,16 +612,16 @@ function renderWindowControlsState(state) {
 ipcRenderer.on('dsh:window-controls-state', (_event, state) => renderWindowControlsState(state))
 
 function ensureDragStyle() {
-  if (document.getElementById('dsh-desktop-window-drag-style')) return
+  if (document.getElementById('dshdesktop-window-drag-style')) return
   const style = document.createElement('style')
-  style.id = 'dsh-desktop-window-drag-style'
+  style.id = 'dshdesktop-window-drag-style'
   style.textContent = `
-    [data-dsh-desktop-drag-region] {
+    [data-dshdesktop-drag-region] {
       -webkit-app-region: drag !important;
     }
     /* 只对未标记的子元素降为 no-drag：嵌套的拖动区（列根 + 顶部行）互不覆盖，
        否则外层标记的 no-drag 会以同权重后置规则压掉内层标记的拖动态。 */
-    [data-dsh-desktop-drag-region] *:not([data-dsh-desktop-drag-region]) {
+    [data-dshdesktop-drag-region] *:not([data-dshdesktop-drag-region]) {
       -webkit-app-region: no-drag !important;
     }
   `
@@ -657,8 +657,8 @@ function findLogoRow() {
 /** 交换拖动区标记；标记自身为拖动区，其未标记子元素由样式规则降为 no-drag。 */
 function swapDragMark(prev, next) {
   if (prev === next) return next
-  if (prev) prev.removeAttribute('data-dsh-desktop-drag-region')
-  if (next) next.setAttribute('data-dsh-desktop-drag-region', '')
+  if (prev) prev.removeAttribute('data-dshdesktop-drag-region')
+  if (next) next.setAttribute('data-dshdesktop-drag-region', '')
   return next
 }
 
@@ -693,7 +693,7 @@ const DRAG_STRIP_Z_INDEX = 30
 function ensureDragStrip() {
   if (dragStripHost || !document.body) return
   dragStripHost = document.createElement('div')
-  dragStripHost.id = 'dsh-desktop-window-drag-strip'
+  dragStripHost.id = 'dshdesktop-window-drag-strip'
   Object.assign(dragStripHost.style, {
     position: 'fixed',
     top: '0',

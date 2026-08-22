@@ -1,6 +1,6 @@
 'use strict'
 /**
- * 运行时管理：把 `@deepseek-ai/dsh` 装进 `~/.dsh-desktop/runtime`，
+ * 运行时管理：把 `@deepseek-ai/dsh` 装进 `~/.dshdesktop/runtime`，
  * 提供「安装 / 查最新 / 更新 / 运行时完整性 / Node 可用性检查」能力。
  *
  * 不依赖 Electron，可用纯 Node 单独单测。
@@ -17,7 +17,9 @@ const { spawn, spawnSync } = require('node:child_process')
 const semver = require('semver')
 
 /** 桌面程序自己的运行时/数据根目录。 */
-const BASE_DIR = path.join(os.homedir(), '.dsh-desktop')
+const BASE_DIR = path.join(os.homedir(), '.dshdesktop')
+/** 旧版本（DSH-Desktop 时期）使用的数据根目录，仅用于一次性迁移。 */
+const LEGACY_BASE_DIR = path.join(os.homedir(), '.dsh-desktop')
 /** @deepseek-ai/dsh 的安装目录（npm 的 cwd）。 */
 const RUNTIME_DIR = path.join(BASE_DIR, 'runtime')
 /** 记录已装版本的元数据文件。 */
@@ -34,6 +36,23 @@ const NPM_INSTALL_TIMEOUT_MS = 600000
 const NPM_VIEW_TIMEOUT_MS = 60000
 /** npm 超时后等待进程树彻底退出的最长时间。 */
 const PROCESS_EXIT_TIMEOUT_MS = 10000
+
+/**
+ * 一次性迁移旧数据目录（更名前为 `~/.dsh-desktop`）到当前 BASE_DIR：
+ * 让既有用户保留本地运行时、偏好与日志，而不是重新下载。
+ * 任何失败（句柄占用/权限等）都不抛出，调用方降级为全新目录即可。
+ * 返回：'moved' | 'already-moved' | 'no-legacy' | 'failed'
+ */
+function migrateLegacyBaseDir({ targetDir = BASE_DIR, legacyDir = LEGACY_BASE_DIR } = {}) {
+  try {
+    if (fs.existsSync(targetDir)) return 'already-moved'
+    if (!fs.existsSync(legacyDir)) return 'no-legacy'
+    fs.renameSync(legacyDir, targetDir)
+    return 'moved'
+  } catch {
+    return 'failed'
+  }
+}
 /** npm 命令名：Windows 下由 run() 用 cmd.exe /c 解析 PATHEXT，这里统一用 `npm`。 */
 function npmCommand() {
   return 'npm'
@@ -697,6 +716,7 @@ module.exports = {
   BASE_DIR,
   RUNTIME_DIR,
   VERSION_FILE,
+  migrateLegacyBaseDir,
   REGISTRY_MIRROR,
   REGISTRY_MIRROR_ALT,
   npmCommand,

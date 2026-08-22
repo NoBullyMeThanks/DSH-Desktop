@@ -1,13 +1,13 @@
 'use strict'
 const { test } = require('node:test')
 const assert = require('node:assert/strict')
-const os = require('node:os')
 const path = require('node:path')
 const fs = require('node:fs')
 const { TerminalHostClient } = require('../terminal-host-client.js')
+const runtime = require('../runtime-manager.js')
 
 const HOST_PATH = path.join(__dirname, '..', 'pty-host.js')
-const MODULE_DIR = path.join(os.homedir(), '.dsh-desktop', 'pty-host', 'node_modules')
+const MODULE_DIR = path.join(runtime.BASE_DIR, 'pty-host', 'node_modules')
 const hostAvailable = () => fs.existsSync(path.join(MODULE_DIR, 'node-pty'))
 
 /** 给 Promise 加超时，超时抛错。 */

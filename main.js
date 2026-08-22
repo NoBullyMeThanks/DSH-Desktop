@@ -4,7 +4,7 @@
  *
  * 双击启动后：
  *   1. 校验系统 Node（dsh 要求 >= 22.19.0）；
- *   2. 确保运行时：把 @deepseek-ai/dsh 装进 ~/.dsh-desktop/runtime（首次）；
+ *   2. 确保运行时：把 @deepseek-ai/dsh 装进 ~/.dshdesktop/runtime（首次）；
  *   3. 拉起 `node <dsh>/lib/bin.js web --port 0` 子进程；
  *   4. 解析 stdout 就绪行 `dsh web: http://127.0.0.1:PORT` → 原生窗口加载该 URL。
  *
@@ -36,7 +36,7 @@ const STALL_DIAGNOSTIC_DELAY_MS = 10_000
 const STALL_DIAGNOSTIC_SECOND_PASS_MS = 60_000
 /** 每次缩放半级，约等于 9.5%，沿用原有手感。 */
 const ZOOM_STEP = 0.5
-const APP_ID = 'com.deepseek.dsh-desktop'
+const APP_ID = 'com.deepseek.dshdesktop'
 const APP_ICON = path.join(__dirname, 'assets', 'icon.ico')
 
 const LOG_FILE = path.join(runtime.BASE_DIR, 'dsh.log')
@@ -82,6 +82,10 @@ process.on('unhandledRejection', (reason) => {
 // ── 日志 ─────────────────────────────────────────────────────────────────────
 
 function initLog() {
+  // 更名后的数据目录与旧版不同：在新目录的任何读写之前做一次性迁移，
+  // 让老用户保留已装运行时、偏好与日志。失败不阻塞启动，降级为全新目录。
+  const migration = runtime.migrateLegacyBaseDir()
+  if (migration === 'failed') console.error('[data-dir] 旧数据目录迁移失败，按全新目录继续')
   fs.mkdirSync(runtime.BASE_DIR, { recursive: true })
   logStream = fs.createWriteStream(LOG_FILE, { flags: 'a' })
   logStream.on('error', () => {})

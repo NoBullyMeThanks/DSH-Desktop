@@ -9,7 +9,7 @@
 |---|---|
 | 前端渲染 | xterm.js（`@xterm/xterm` + `@xterm/addon-fit`，VS Code 同款，MIT） |
 | 后端 PTY | node-pty（Windows 走 ConPTY，VS Code 同款） |
-| PTY 宿主位置 | **系统 Node 宿主进程**（方案 1）：node-pty 装在 `~/.dsh-desktop` 运行时目录，Electron 包保持 100% 纯 JS |
+| PTY 宿主位置 | **系统 Node 宿主进程**（方案 1）：node-pty 装在 `~/.dshdesktop` 运行时目录，Electron 包保持 100% 纯 JS |
 | 面板形态 | 主窗口 `WebContentsView` 底部面板，覆盖 DSH 页面底部（DSH 页面零改动） |
 | 默认 shell | PowerShell（探测顺序：`pwsh` → `powershell.exe` → `cmd.exe`） |
 | 默认工作目录 | 用户主目录（`os.homedir()`） |
@@ -51,7 +51,7 @@
 **安装与加载**
 
 - `pty-host.js` 是纯 JS 源码，随应用打包（加入 electron-builder `files`），**本身不含 node-pty 代码**。
-- node-pty 以 npm 包形式装进运行时目录：`~/.dsh-desktop/pty-host/`（`npm install node-pty@<锁定版本> --prefix <该目录>`），版本号常量写在 `pty-host.js` 顶部并注明升级步骤。**注意 npm 11 的 allow-scripts 机制**：node-pty 的安装脚本（下载预编译二进制）默认被拦截，装完需执行 `npm approve-scripts node-pty --prefix <该目录>`，或在托管 package.json 里预写 `"allowScripts": {"node-pty@<版本>": true}`（M1 实测：`npm approve-scripts` 会把这个字段写进 package.json，自动安装器要复刻这一步）。
+- node-pty 以 npm 包形式装进运行时目录：`~/.dshdesktop/pty-host/`（`npm install node-pty@<锁定版本> --prefix <该目录>`），版本号常量写在 `pty-host.js` 顶部并注明升级步骤。**注意 npm 11 的 allow-scripts 机制**：node-pty 的安装脚本（下载预编译二进制）默认被拦截，装完需执行 `npm approve-scripts node-pty --prefix <该目录>`，或在托管 package.json 里预写 `"allowScripts": {"node-pty@<版本>": true}`（M1 实测：`npm approve-scripts` 会把这个字段写进 package.json，自动安装器要复刻这一步）。
 - `pty-host.js` 通过绝对路径 `require` 加载 node-pty（避免依赖 `NODE_PATH` 的隐式行为），找不到时输出明确错误。
 - 首次打开终端时才执行 `ensurePtyHost()`（懒安装，不增加首启负担）；失败时面板内显示错误 + 「打开日志」按钮。安装逻辑沿用 `runtime-manager.js` 的 npm 执行与日志模式，并纳入 `runtime.killActiveChildren` 清理范围。
 - 离线场景：与 dsh runtime 首次安装行为一致——装不上则终端不可用，其余功能不受影响。
@@ -191,7 +191,7 @@
 ## 5. 实施里程碑
 
 - **M1 宿主原型**：`pty-host.js` + runtime 目录装 node-pty；用管道手动喂 JSON 冒烟 spawn/write/resize/kill/退出清理。**已完成**：
-  - 落地文件：`pty-host.js`、`scripts/smoke-pty-host.js`；node-pty 锁定 **1.1.0**（npm latest 稳定版，N-API 预编译，无需本机编译工具链）装入 `~/.dsh-desktop/pty-host/`。
+  - 落地文件：`pty-host.js`、`scripts/smoke-pty-host.js`；node-pty 锁定 **1.1.0**（npm latest 稳定版，N-API 预编译，无需本机编译工具链）装入 `~/.dshdesktop/pty-host/`。
   - 冒烟结果（`node scripts/smoke-pty-host.js`，7/7 通过）：spawn 120x30 → 输出回显 → resize 100x24 后继续交互 → `exit` 自然退出（code 0）→ 再 spawn 复用 → kill 后收到 exit 事件 → shutdown 后宿主以 0 退出；退出后无孤儿进程。
   - 实测要点：① npm 11 需 `npm approve-scripts node-pty`（或托管 package.json 预写 `allowScripts`），否则预编译二进制不会下载；② PSReadLine 会给输入回显加 ANSI 着色码，协议断言前需剥色（冒烟脚本已内置 `stripAnsi`）；③ `taskkill /F` 强杀时 node-pty 的 console-list 辅助进程可能打印 `AttachConsole failed` 噪音，属良性，宿主不受影响，只会进 dsh.log。
 - **M2 主进程骨架**：`terminal-manager.js` + WebContentsView 面板 + IPC 校验 + 会话表；面板能显示 shell 输出。**已完成**：

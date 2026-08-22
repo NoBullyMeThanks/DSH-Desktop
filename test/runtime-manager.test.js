@@ -8,7 +8,7 @@ const path = require('node:path')
 const runtime = require('../runtime-manager.js')
 
 function createRuntime(t, version = '1.2.3', withBin = true) {
-  const runtimeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-desktop-runtime-'))
+  const runtimeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dshdesktop-runtime-'))
   const packageDir = path.join(runtimeDir, 'node_modules', '@deepseek-ai', 'dsh')
   fs.mkdirSync(path.join(packageDir, 'lib'), { recursive: true })
   fs.writeFileSync(path.join(packageDir, 'package.json'), JSON.stringify({ version }))
@@ -253,7 +253,7 @@ test('pickRegistries 全部不可达时保留原顺序让 npm 报错', async () 
 })
 
 test('installVersion 全部源失败时返回含源列表的错误', async (t) => {
-  const runtimeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-desktop-runtime-'))
+  const runtimeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dshdesktop-runtime-'))
   const versionFile = path.join(runtimeDir, 'version.json')
   t.after(() => fs.rmSync(runtimeDir, { recursive: true, force: true }))
   const calls = []
@@ -294,7 +294,7 @@ test('isNotFoundError 只识别"版本不存在"类错误', () => {
 })
 
 test('installVersion 命中"版本不存在"时用 prefer-online 在同一源重试成功', async (t) => {
-  const runtimeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-desktop-runtime-'))
+  const runtimeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dshdesktop-runtime-'))
   const versionFile = path.join(runtimeDir, 'version.json')
   const packageDir = path.join(runtimeDir, 'node_modules', '@deepseek-ai', 'dsh')
   t.after(() => fs.rmSync(runtimeDir, { recursive: true, force: true }))
@@ -329,7 +329,7 @@ test('installVersion 命中"版本不存在"时用 prefer-online 在同一源重
 })
 
 test('installVersion 所有源均报"版本不存在"时返回错误且每个源都重试一次', async (t) => {
-  const runtimeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-desktop-runtime-'))
+  const runtimeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dshdesktop-runtime-'))
   const versionFile = path.join(runtimeDir, 'version.json')
   t.after(() => fs.rmSync(runtimeDir, { recursive: true, force: true }))
   const calls = []
@@ -354,7 +354,7 @@ test('installVersion 所有源均报"版本不存在"时返回错误且每个源
 })
 
 test('installVersion 未确认超时进程退出时不再切换安装源', async (t) => {
-  const runtimeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-desktop-runtime-'))
+  const runtimeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dshdesktop-runtime-'))
   const versionFile = path.join(runtimeDir, 'version.json')
   t.after(() => fs.rmSync(runtimeDir, { recursive: true, force: true }))
   const calls = []
@@ -380,7 +380,7 @@ test('installVersion 未确认超时进程退出时不再切换安装源', async
 })
 
 test('installVersion 把 npm 输出透传给 onProgress', async (t) => {
-  const runtimeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-desktop-runtime-'))
+  const runtimeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dshdesktop-runtime-'))
   const versionFile = path.join(runtimeDir, 'version.json')
   const packageDir = path.join(runtimeDir, 'node_modules', '@deepseek-ai', 'dsh')
   fs.mkdirSync(path.join(packageDir, 'lib'), { recursive: true })
@@ -406,7 +406,7 @@ test('installVersion 把 npm 输出透传给 onProgress', async (t) => {
 })
 
 test('installVersion 在 legacy 安装后显式补齐必需 peer dependency', async (t) => {
-  const runtimeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-desktop-runtime-'))
+  const runtimeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dshdesktop-runtime-'))
   const versionFile = path.join(runtimeDir, 'version.json')
   const dshDir = path.join(runtimeDir, 'node_modules', '@deepseek-ai', 'dsh')
   const bootDir = path.join(runtimeDir, 'node_modules', '@deepseek-ai', 'dsh-app-boot')
@@ -460,7 +460,7 @@ test('installVersion 在 legacy 安装后显式补齐必需 peer dependency', as
 })
 
 test('installVersion 官方源不可达时直达镜像源', async (t) => {
-  const runtimeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-desktop-runtime-'))
+  const runtimeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dshdesktop-runtime-'))
   const versionFile = path.join(runtimeDir, 'version.json')
   const packageDir = path.join(runtimeDir, 'node_modules', '@deepseek-ai', 'dsh')
   fs.mkdirSync(path.join(packageDir, 'lib'), { recursive: true })
@@ -521,7 +521,7 @@ test('run 支持硬超时并终止进程树', async () => {
 })
 
 test('run 调用 npm-cli.js 时完整保留 shell 特殊字符参数', async (t) => {
-  const fixtureDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-desktop-npm-cli-'))
+  const fixtureDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dshdesktop-npm-cli-'))
   const fixturePath = path.join(fixtureDir, 'npm-cli.js')
   fs.writeFileSync(fixturePath, 'process.stdout.write(JSON.stringify(process.argv.slice(2)))\n')
   t.after(() => fs.rmSync(fixtureDir, { recursive: true, force: true }))
@@ -534,4 +534,47 @@ test('run 调用 npm-cli.js 时完整保留 shell 特殊字符参数', async (t)
   const res = await runtime.run('npm', args, { npmCliPath: fixturePath })
   assert.equal(res.ok, true)
   assert.deepEqual(JSON.parse(res.out), args)
+})
+
+test('migrateLegacyBaseDir 把旧目录整体搬到新目录', (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dshdesktop-migrate-'))
+  const legacyDir = path.join(root, 'legacy')
+  const targetDir = path.join(root, 'target')
+  fs.mkdirSync(path.join(legacyDir, 'runtime'), { recursive: true })
+  fs.writeFileSync(path.join(legacyDir, 'runtime', 'marker.txt'), 'ok')
+  fs.writeFileSync(path.join(legacyDir, 'version.json'), '{"installed":"1.2.3"}')
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }))
+  assert.equal(runtime.migrateLegacyBaseDir({ targetDir, legacyDir }), 'moved')
+  assert.equal(fs.existsSync(legacyDir), false)
+  assert.equal(fs.readFileSync(path.join(targetDir, 'runtime', 'marker.txt'), 'utf8'), 'ok')
+  // 目标已存在时不再动旧目录（不合并、不覆盖）
+  fs.mkdirSync(legacyDir, { recursive: true })
+  fs.writeFileSync(path.join(legacyDir, 'extra.txt'), 'leftover')
+  assert.equal(runtime.migrateLegacyBaseDir({ targetDir, legacyDir }), 'already-moved')
+  assert.equal(fs.existsSync(path.join(legacyDir, 'extra.txt')), true)
+})
+
+test('migrateLegacyBaseDir 旧目录不存在时返回 no-legacy', (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dshdesktop-migrate-'))
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }))
+  assert.equal(runtime.migrateLegacyBaseDir({
+    targetDir: path.join(root, 'target'),
+    legacyDir: path.join(root, 'missing'),
+  }), 'no-legacy')
+})
+
+test('migrateLegacyBaseDir 迁移失败时返回 failed 且不抛异常', (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dshdesktop-migrate-'))
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }))
+  // 目标路径的父级是文件 → rename 必然失败；旧目录应原样保留
+  const legacyDir = path.join(root, 'legacy')
+  fs.mkdirSync(legacyDir)
+  fs.writeFileSync(path.join(legacyDir, 'marker.txt'), 'ok')
+  const blocker = path.join(root, 'blocker')
+  fs.writeFileSync(blocker, 'i am a file')
+  assert.equal(runtime.migrateLegacyBaseDir({
+    targetDir: path.join(blocker, 'target'),
+    legacyDir,
+  }), 'failed')
+  assert.equal(fs.existsSync(legacyDir), true)
 })

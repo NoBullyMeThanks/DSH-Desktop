@@ -1,10 +1,10 @@
 <p align="center">
-  <img src="assets/icon.png" alt="DSH-Desktop 项目图标" width="128">
+  <img src="assets/icon.png" alt="DSH Desktop 项目图标" width="128">
 </p>
 
-<h1 align="center">DSH-Desktop</h1>
+<h1 align="center">DSH Desktop</h1>
 
-DSH-Desktop 是一个面向 Windows 的 DeepSeek Harness（DSH）桌面启动器。它把 DSH 原本需要通过命令行启动的本地 Web 服务包装成可直接双击运行的桌面应用，并默认跟随 DeepSeek 官方 npm 包的最新版本。
+DSH Desktop 是一个面向 Windows 的 DeepSeek Harness（DSH）桌面启动器。它把 DSH 原本需要通过命令行启动的本地 Web 服务包装成可直接双击运行的桌面应用，并默认跟随 DeepSeek 官方 npm 包的最新版本。
 
 > 本项目不修改 DSH：加载的是本机 DSH 服务，在官方界面基础上提供桌面窗口。
 
@@ -16,7 +16,7 @@ DeepSeek Harness 官方主要提供命令行入口：
 npx @deepseek-ai/dsh web
 ```
 
-该命令会在本机启动 HTTP 服务，用户还需要自行管理终端进程、访问地址和运行时版本。DSH-Desktop 将这些步骤自动化：
+该命令会在本机启动 HTTP 服务，用户还需要自行管理终端进程、访问地址和运行时版本。DSH Desktop 将这些步骤自动化：
 
 ```text
 启动桌面应用
@@ -103,7 +103,7 @@ npm start
 - `npm test`：执行全部自动化测试（终端纯函数、协议客户端、工作区解析等单元测试）。
 - `npm start`：以开发模式运行 `electron .`。
 
-首次启动会把 DSH 下载到 `~/.dsh-desktop/runtime/`，可能需要几十秒到几分钟。后续启动会直接复用完整的本地运行时；网络不可用时仍可使用已安装版本。
+首次启动会把 DSH 下载到 `~/.dshdesktop/runtime/`，可能需要几十秒到几分钟。后续启动会直接复用完整的本地运行时；网络不可用时仍可使用已安装版本。
 
 打开终端面板的快捷键是 **`Ctrl+\``**（反引号），也可通过窗口控件区「终端」按钮或托盘「打开终端」。
 
@@ -118,14 +118,14 @@ node_modules\.bin\electron.cmd scripts/electron-terminal-smoke.js
 
 | 路径 | 内容 |
 |---|---|
-| `~/.dsh-desktop/runtime/` | DSH-Desktop 管理的 DSH npm 运行时 |
-| `~/.dsh-desktop/pty-host/` | 终端宿主的 node-pty 安装目录（首次打开终端时懒安装） |
-| `~/.dsh-desktop/version.json` | 当前已安装的 DSH 版本 |
-| `~/.dsh-desktop/preferences.json` | 启动更新检查、终端停靠等桌面端偏好 |
-| `~/.dsh-desktop/dsh.log` | 桌面启动器和 DSH 子进程日志 |
+| `~/.dshdesktop/runtime/` | DSH Desktop 管理的 DSH npm 运行时 |
+| `~/.dshdesktop/pty-host/` | 终端宿主的 node-pty 安装目录（首次打开终端时懒安装） |
+| `~/.dshdesktop/version.json` | 当前已安装的 DSH 版本 |
+| `~/.dshdesktop/preferences.json` | 启动更新检查、终端停靠等桌面端偏好 |
+| `~/.dshdesktop/dsh.log` | 桌面启动器和 DSH 子进程日志 |
 | `~/.dsh/` | DSH 自身的凭据、设置和会话数据 |
 
-DSH-Desktop 与命令行版 DSH 默认共享 `~/.dsh/`。API Key 可以在 DSH Web UI 的 Settings → Models 中配置，也可以通过 DSH 支持的环境变量提供。
+DSH Desktop 与命令行版 DSH 默认共享 `~/.dsh/`。API Key 可以在 DSH Web UI 的 Settings → Models 中配置，也可以通过 DSH 支持的环境变量提供。
 
 ## 项目结构
 

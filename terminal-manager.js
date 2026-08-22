@@ -3,7 +3,7 @@
  * 终端面板主进程管理器。
  *
  * 职责：
- *  1. pty-host 生命周期：node-pty 懒安装（~/.dsh-desktop/pty-host）→ 拉起宿主 → 退出记录；
+ *  1. pty-host 生命周期：node-pty 懒安装（~/.dshdesktop/pty-host）→ 拉起宿主 → 退出记录；
  *  2. 会话表：spawn/write/resize/kill 的会话状态机，data/exit 事件转发；
  *  3. IPC：面板视图专属通道，全部校验 event.sender === 面板 webContents，
  *     DSH 内容页（mainWindow.webContents）永远无法触达终端通道；

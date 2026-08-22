@@ -174,7 +174,7 @@ app.whenReady().then(async () => {
       // 造假消息：撑出消息滚动体（DOM 注入，刷新即回滚），再测 padding 效果
       const filler = document.createElement('div')
       filler.style.height = '2000px'
-      filler.textContent = 'dsh-desktop-smoke-filler'
+      filler.textContent = 'dshdesktop-smoke-filler'
       if (messageSeat) messageSeat.appendChild(filler)
       await new Promise((r) => setTimeout(r, 250))
       // 有消息后重新定位消息滚动体

@@ -12,7 +12,7 @@
  * 破坏按行分帧。
  *
  * node-pty 模块目录解析优先级：--module-dir 参数 > PTY_HOST_MODULE_DIR 环境变量
- * > ~/.dsh-desktop/pty-host/node_modules（与 runtime-manager 的 BASE_DIR 同根）。
+ * > ~/.dshdesktop/pty-host/node_modules（与 runtime-manager 的 BASE_DIR 同根）。
  */
 const os = require('node:os')
 const path = require('node:path')
@@ -46,7 +46,7 @@ function resolveModuleDir(argv) {
   const argIndex = argv.indexOf('--module-dir')
   if (argIndex !== -1 && argv[argIndex + 1]) return argv[argIndex + 1]
   if (process.env.PTY_HOST_MODULE_DIR) return process.env.PTY_HOST_MODULE_DIR
-  return path.join(os.homedir(), '.dsh-desktop', 'pty-host', 'node_modules')
+  return path.join(os.homedir(), '.dshdesktop', 'pty-host', 'node_modules')
 }
 
 const moduleDir = resolveModuleDir(process.argv.slice(2))
@@ -55,7 +55,7 @@ try {
   nodePty = require(path.join(moduleDir, 'node-pty'))
 } catch (err) {
   logLine(`node-pty 不可用：${err.message}`)
-  logLine(`请先安装：npm install --prefix "${path.join(os.homedir(), '.dsh-desktop', 'pty-host')}" node-pty@${PTY_PACKAGE_VERSION}`)
+  logLine(`请先安装：npm install --prefix "${path.join(os.homedir(), '.dshdesktop', 'pty-host')}" node-pty@${PTY_PACKAGE_VERSION}`)
   process.exit(2)
 }
 

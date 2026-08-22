@@ -51,7 +51,7 @@ secrets/
 
 # DSH 与桌面启动器的本机用户数据
 .dsh/
-.dsh-desktop/
+.dshdesktop/
 /preferences.json
 /version.json
 /dsh.log

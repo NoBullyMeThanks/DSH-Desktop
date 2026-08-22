@@ -18,7 +18,7 @@ const { app, BrowserWindow, ipcMain, desktopCapturer } = require('electron')
 const { createTerminalManager } = require(path.join(__dirname, '..', 'terminal-manager.js'))
 
 // 独立 userData：避免与正式应用的 userData 目录和单实例锁冲突
-app.setPath('userData', path.join(os.tmpdir(), 'dsh-desktop-terminal-smoke'))
+app.setPath('userData', path.join(os.tmpdir(), 'dshdesktop-terminal-smoke'))
 
 const ROOT = path.join(__dirname, '..')
 const SCREENSHOT_PATH = path.join(ROOT, '.tmp', 'terminal-smoke-panel.png')
