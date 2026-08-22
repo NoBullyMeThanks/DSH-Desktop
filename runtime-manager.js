@@ -206,6 +206,21 @@ function errMsg(res) {
   return `命令退出码 ${res.code}`
 }
 
+/**
+ * 判断 npm 失败是否为「元数据里找不到目标版本」（ETARGET / notarget / 404 no match，
+ * 或 ERESOLVE 树中节点版本为 @undefined——后者是包元数据里没有匹配版本的典型形态，
+ * 真实版本冲突会报告具体版本号，如 Found: react@18.3.1）。
+ * 这类错误未必代表版本真的不存在：本地缓存或 registry CDN 边缘可能存着旧
+ * packument（例如上次安装 0.1.0-rc.8 时缓存的依赖树），会把刚发布的新版本误报为
+ * notarget。调用方应强制重新校验元数据后再判断。
+ */
+function isNotFoundError(res) {
+  if (!res || res.ok) return false
+  const text = `${res.err ?? ''}\n${res.error?.message ?? ''}`
+  if (/notarget|no matching version found|no match found for version/i.test(text)) return true
+  return /unable to resolve dependency tree/i.test(text) && /@undefined/i.test(text)
+}
+
 /** 旧 npm 进程未确认退出时，停止切换安装源以保护运行时目录。 */
 function stopForUnconfirmedExit(lastErr) {
   return { ok: false, err: `${lastErr}\n未确认旧 npm 进程已退出，已停止切换安装源以保护运行时目录。` }
@@ -480,6 +495,19 @@ async function installVersion(version, options = {}) {
     // 网络黑洞（大文件传输卡死）时快速失败并换下一个源，而不是无限等
     '--fetch-timeout=90000', '--fetch-retries=1',
   ]
+  /**
+   * 跑一次 npm install 并处理「版本不存在」：`--prefer-offline` 会绕过元数据
+   * 新鲜度校验，本地缓存若存着旧 packument（上次安装 0.1.0-rc.8 时缓存的
+   * 依赖树），会把刚发布的新版本误报为 notarget。命中此类错误时改用
+   * `--prefer-online` 强制向同一源重新校验元数据再试一次；缓存导致的问题
+   * 会在这一跳自愈，真正不存在的版本才会进入下一个源的尝试。
+   */
+  const runInstallAttempt = async (args, runOpts) => {
+    const first = await runner(npmCommand(), args, runOpts)
+    if (first.ok || !isNotFoundError(first)) return first
+    log('[install] 元数据缓存过期导致"版本不存在"，强制重新校验后重试…')
+    return runner(npmCommand(), args.map((a) => (a === '--prefer-offline' ? '--prefer-online' : a)), runOpts)
+  }
   for (const attempt of attempts) {
     const args = [
       'install', spec,
@@ -491,7 +519,7 @@ async function installVersion(version, options = {}) {
     if (options.force === true) args.push('--force')
     if (attempt.registry) args.push('--registry', attempt.registry)
     log(`[install] 正在从 ${sourceName(attempt)} 安装…`)
-    const res = await runner(npmCommand(), args, {
+    const res = await runInstallAttempt(args, {
       cwd: runtimeDir,
       timeoutMs: NPM_INSTALL_TIMEOUT_MS,
       onData: onProgress,
@@ -531,7 +559,7 @@ async function installVersion(version, options = {}) {
       // --no-save 避免把临时修复包固化为根依赖，影响后续更新。
       const peerArgs = ['install', ...peerSpecs, ...commonArgs, '--no-save']
       if (attempt.registry) peerArgs.push('--registry', attempt.registry)
-      const peerResult = await runner(npmCommand(), peerArgs, {
+      const peerResult = await runInstallAttempt(peerArgs, {
         cwd: runtimeDir,
         timeoutMs: NPM_INSTALL_TIMEOUT_MS,
         onData: onProgress,
@@ -686,6 +714,7 @@ module.exports = {
   parseVersion,
   parseDistTags,
   bestOfTags,
+  isNotFoundError,
   registryAttempts,
   pickRegistries,
   nodeVersion,

@@ -278,6 +278,81 @@ test('installVersion 全部源失败时返回含源列表的错误', async (t) =
   assert.equal(calls[1].cwd, runtimeDir)
 })
 
+test('isNotFoundError 只识别"版本不存在"类错误', () => {
+  const notarget = { ok: false, err: 'npm error code ETARGET\nnpm error notarget No matching version found for @deepseek-ai/dsh-agent-instructions@^0.1.1-rc.2.' }
+  const view404 = { ok: false, err: 'npm error 404 No match found for version 0.1.1-rc.2' }
+  const eresolveUndefined = { ok: false, err: 'npm error code ERESOLVE\nnpm error ERESOLVE unable to resolve dependency tree\nnpm error Found: @deepseek-ai/dsh-invariants@undefined' }
+  const eresolveConflict = { ok: false, err: 'npm error code ERESOLVE\nnpm error ERESOLVE unable to resolve dependency tree\nnpm error Found: react@18.3.1' }
+  const other = { ok: false, err: 'npm error code ECONNREFUSED\n模拟网络失败' }
+  assert.equal(runtime.isNotFoundError(notarget), true)
+  assert.equal(runtime.isNotFoundError(view404), true)
+  assert.equal(runtime.isNotFoundError(eresolveUndefined), true)
+  assert.equal(runtime.isNotFoundError(eresolveConflict), false)
+  assert.equal(runtime.isNotFoundError(other), false)
+  assert.equal(runtime.isNotFoundError({ ok: true }), false)
+  assert.equal(runtime.isNotFoundError(null), false)
+})
+
+test('installVersion 命中"版本不存在"时用 prefer-online 在同一源重试成功', async (t) => {
+  const runtimeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-desktop-runtime-'))
+  const versionFile = path.join(runtimeDir, 'version.json')
+  const packageDir = path.join(runtimeDir, 'node_modules', '@deepseek-ai', 'dsh')
+  t.after(() => fs.rmSync(runtimeDir, { recursive: true, force: true }))
+  const calls = []
+  const runner = async (cmd, args) => {
+    calls.push(args)
+    if (args[0] === 'config') return { ok: true, code: 0, out: 'https://registry.npmjs.org/\n' }
+    if (args.includes('--prefer-online')) {
+      // 强制重新校验后模拟装好了运行时（本地缓存过期问题的自愈路径）
+      fs.mkdirSync(path.join(packageDir, 'lib'), { recursive: true })
+      fs.writeFileSync(path.join(packageDir, 'package.json'), JSON.stringify({ version: '0.1.1-rc.2' }))
+      fs.writeFileSync(path.join(packageDir, 'lib', 'bin.js'), '')
+    }
+    return args.includes('--prefer-online')
+      ? { ok: true, code: 0 }
+      : { ok: false, code: 1, err: 'npm error code ETARGET\nnpm error notarget No matching version found for @deepseek-ai/dsh-agent-instructions@^0.1.1-rc.2.' }
+  }
+  const result = await runtime.installVersion('0.1.1-rc.2', {
+    runtimeDir,
+    versionFile,
+    runner,
+    probe: async () => true,
+  })
+  assert.equal(result.ok, true)
+  assert.equal(result.version, '0.1.1-rc.2')
+  // config + 第一个源（prefer-offline） + 同源重试（prefer-online）；成功即不再换源
+  assert.equal(calls.length, 3)
+  assert.ok(calls[1].includes('--prefer-offline'))
+  assert.ok(calls[2].includes('--prefer-online'))
+  assert.ok(calls[2].includes('https://registry.npmjs.org/'))
+  assert.equal(calls[2].includes('--prefer-offline'), false)
+})
+
+test('installVersion 所有源均报"版本不存在"时返回错误且每个源都重试一次', async (t) => {
+  const runtimeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-desktop-runtime-'))
+  const versionFile = path.join(runtimeDir, 'version.json')
+  t.after(() => fs.rmSync(runtimeDir, { recursive: true, force: true }))
+  const calls = []
+  const runner = async (cmd, args) => {
+    calls.push(args)
+    if (args[0] === 'config') return { ok: true, code: 0, out: 'https://registry.npmjs.org/\n' }
+    return { ok: false, code: 1, err: 'npm error code ETARGET\nnpm error notarget No matching version found for @deepseek-ai/dsh@0.1.1-rc.2.' }
+  }
+  const result = await runtime.installVersion('0.1.1-rc.2', {
+    runtimeDir,
+    versionFile,
+    runner,
+    probe: async () => false,
+  })
+  assert.equal(result.ok, false)
+  assert.match(result.err, /已尝试 3 个源/)
+  // config + 3 个源 × (prefer-offline + prefer-online)
+  assert.equal(calls.length, 7)
+  for (const arg of calls.slice(1)) {
+    assert.ok(arg.includes('--prefer-offline') || arg.includes('--prefer-online'))
+  }
+})
+
 test('installVersion 未确认超时进程退出时不再切换安装源', async (t) => {
   const runtimeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-desktop-runtime-'))
   const versionFile = path.join(runtimeDir, 'version.json')
