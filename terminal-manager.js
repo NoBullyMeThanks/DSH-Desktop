@@ -15,7 +15,7 @@ const path = require('node:path')
 const os = require('node:os')
 const fs = require('node:fs')
 const crypto = require('node:crypto')
-const { WebContentsView, ipcMain, nativeTheme, protocol } = require('electron')
+const { app, WebContentsView, ipcMain, nativeTheme, protocol } = require('electron')
 const runtime = require('./runtime-manager.js')
 const utils = require('./terminal-utils.js')
 const { TerminalHostClient } = require('./terminal-host-client.js')
@@ -207,8 +207,16 @@ function createTerminalManager({
         sendToPanel('terminal:error', { message })
         return null
       }
+      // pty-host 由系统 Node 独立执行（不是 Electron 主进程），读不了 app.asar
+      // 归档内的脚本；打包后必须指向 resources/app.asar.unpacked 下的副本
+      // （package.json 的 asarUnpack 正是为此），否则宿主报 Cannot find module
+      // 立即退出，安装版终端表现为红灯、无默认会话、加号无效。开发模式
+      // __dirname 是真实源码目录，直接使用即可。
+      const hostPath = app.isPackaged
+        ? path.join(process.resourcesPath, 'app.asar.unpacked', 'pty-host.js')
+        : path.join(__dirname, 'pty-host.js')
       const client = new TerminalHostClient({
-        hostPath: path.join(__dirname, 'pty-host.js'),
+        hostPath,
         moduleDir: path.join(PTY_HOST_DIR, 'node_modules'),
         log: (text) => log(String(text).trimEnd()),
       })
