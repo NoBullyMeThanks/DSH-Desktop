@@ -9,6 +9,7 @@ let frame = null
 let sidebar = null
 let resizeObserver = null
 let dragRow = null
+let headerRow = null
 let scheduled = false
 let dialogHost = null
 let dialogRoot = null
@@ -22,6 +23,17 @@ const DIALOG_MODES = new Set(['loading', 'progress', 'info', 'confirm', 'error']
 const MIN_DIALOG_TEXT_CONTRAST = 4.5
 const DARK_DIALOG_LABEL = Object.freeze({ red: 23, green: 23, blue: 23, alpha: 1 })
 const LIGHT_DIALOG_LABEL = Object.freeze({ red: 255, green: 255, blue: 255, alpha: 1 })
+
+/** 窗口按钮行高度（windowControls 的 .controls）。 */
+const WINDOW_CONTROL_BAR_HEIGHT = 28
+/** DSH 会话区 header 的顶部内边距（头部按钮条距窗口顶的既有距离）。 */
+const SESSION_HEADER_TOP_PADDING = 12
+/**
+ * 顶部边框条带高度：DSH 内容整体下移该距离，使窗口按钮行底部与会话区头部
+ * 按钮（Session log 等）上边框恰好留 1px 间隙（28 + 1 − 12 = 17）。
+ * 条带是窗口拖动区；下移保证窗口按钮不遮挡会话区头部的按钮。
+ */
+const TOP_BORDER_INSET_PX = WINDOW_CONTROL_BAR_HEIGHT + 1 - SESSION_HEADER_TOP_PADDING
 
 function ensureDialogUi() {
   if (dialogRoot || !document.body) return
@@ -502,13 +514,13 @@ function ensureWindowControls() {
       .controls {
         display: flex;
         width: 112px;
-        height: 28px;
+        height: ${WINDOW_CONTROL_BAR_HEIGHT}px;
         pointer-events: auto;
         -webkit-app-region: no-drag;
       }
       button {
-        width: 28px;
-        height: 28px;
+        width: ${WINDOW_CONTROL_BAR_HEIGHT}px;
+        height: ${WINDOW_CONTROL_BAR_HEIGHT}px;
         display: grid;
         padding: 0;
         place-items: center;
@@ -607,20 +619,26 @@ function ensureDragStyle() {
     [data-dsh-desktop-drag-region] {
       -webkit-app-region: drag !important;
     }
-    [data-dsh-desktop-drag-region] * {
+    /* 只对未标记的子元素降为 no-drag：嵌套的拖动区（列根 + 顶部行）互不覆盖，
+       否则外层标记的 no-drag 会以同权重后置规则压掉内层标记的拖动态。 */
+    [data-dsh-desktop-drag-region] *:not([data-dsh-desktop-drag-region]) {
       -webkit-app-region: no-drag !important;
     }
   `
   document.head.appendChild(style)
 }
 
-function findLogoRow() {
+/** 侧栏根容器（SidebarRoot 本体，slot 包装层之上）。 */
+function findSidebarRoot() {
   if (!sidebar?.isConnected) return null
-
   // DSH 的 slot 渲染器会在侧栏列与 SidebarRoot 之间插入 display: contents 包装层。
-  // 通过稳定的 data-slot 语义定位，避免把覆盖整栏的 SidebarRoot 误设为拖动区。
   const slot = sidebar.querySelector(':scope > [data-slot="sidebar"]')
   const sidebarRoot = slot?.firstElementChild
+  return sidebarRoot instanceof HTMLElement ? sidebarRoot : null
+}
+
+function findLogoRow() {
+  const sidebarRoot = findSidebarRoot()
   const candidate = sidebarRoot?.firstElementChild
   if (!(candidate instanceof HTMLElement)) return null
 
@@ -629,19 +647,83 @@ function findLogoRow() {
   const topOffset = candidateRect.top - sidebarRect.top
   const insideSidebar = candidateRect.left >= sidebarRect.left - 1
     && candidateRect.right <= sidebarRect.right + 1
-  const isTopRow = topOffset >= -1 && topOffset <= 24
+  const isTopRow = topOffset >= -1 && topOffset <= 34
   const hasSafeSize = candidateRect.width > 0
     && candidateRect.height > 0
     && candidateRect.height <= 80
   return insideSidebar && isTopRow && hasSafeSize ? candidate : null
 }
 
+/** 交换拖动区标记；标记自身为拖动区，其未标记子元素由样式规则降为 no-drag。 */
+function swapDragMark(prev, next) {
+  if (prev === next) return next
+  if (prev) prev.removeAttribute('data-dsh-desktop-drag-region')
+  if (next) next.setAttribute('data-dsh-desktop-drag-region', '')
+  return next
+}
+
+const topInsetApplied = new WeakSet()
+
+/**
+ * 给容器内容下移 TOP_BORDER_INSET_PX（幂等，每元素只加一次）。
+ * 在「列根」上下移而不是整体推 frame：列的背景从窗口顶一直铺到内容，
+ * 顶部条带与下方同色，不会出现一条异色横带；内容不越界需 border-box。
+ */
+function applyTopInset(element) {
+  if (!(element instanceof HTMLElement)) return
+  if (topInsetApplied.has(element)) return
+  const computed = getComputedStyle(element)
+  const current = parseFloat(computed.paddingTop)
+  if (!Number.isFinite(current)) return
+  element.style.boxSizing = 'border-box'
+  element.style.paddingTop = `${Math.round(current + TOP_BORDER_INSET_PX)}px`
+  topInsetApplied.add(element)
+}
+
+let dragStripHost = null
+
+/** 顶部边框拖动条带：独立注入的固定透明层，覆盖 0..TOP_BORDER_INSET_PX。 */
+const DRAG_STRIP_Z_INDEX = 30
+
+/**
+ * 创建顶部边框拖动条带。不依赖 DSH 页面的任何类名/结构：fixed 定位、透明、
+ * 位于页面之上（但在窗口按钮层之下的 z30），整条可拖动窗口。
+ * 条带高度与内容下移量一致（TOP_BORDER_INSET_PX），恰好止于会话区头部按钮上方。
+ */
+function ensureDragStrip() {
+  if (dragStripHost || !document.body) return
+  dragStripHost = document.createElement('div')
+  dragStripHost.id = 'dsh-desktop-window-drag-strip'
+  Object.assign(dragStripHost.style, {
+    position: 'fixed',
+    top: '0',
+    left: '0',
+    right: '0',
+    height: `${TOP_BORDER_INSET_PX}px`,
+    zIndex: `${DRAG_STRIP_Z_INDEX}`,
+    pointerEvents: 'auto',
+    background: 'transparent',
+    webkitAppRegion: 'drag',
+  })
+  document.body.appendChild(dragStripHost)
+}
+
+/**
+ * 顶部条带内容下移：给侧栏根与会话列根加 TOP_BORDER_INSET_PX 顶部内边距
+ * （幂等）。在「列根」上下移而不是整体推 frame：列的背景从窗口顶一直铺到
+ * 内容，顶部条带与下方同色；会话区头部按钮随之下移，与窗口按钮行留出间隙。
+ */
+function applyColumnInsets() {
+  applyTopInset(findSidebarRoot())
+  applyTopInset(findConversationRoot())
+}
+
 function updateDragRegion() {
-  const next = findLogoRow()
-  if (next === dragRow && next?.hasAttribute('data-dsh-desktop-drag-region')) return
-  if (dragRow) dragRow.removeAttribute('data-dsh-desktop-drag-region')
-  dragRow = next
-  if (dragRow) dragRow.setAttribute('data-dsh-desktop-drag-region', '')
+  applyColumnInsets()
+  // 顶部行的自有 padding 区域并入拖动区（按钮保持可点）；
+  // 顶部边框整条条带由 ensureDragStrip 注入的固定透明层负责。
+  dragRow = swapDragMark(dragRow, findLogoRow())
+  headerRow = swapDragMark(headerRow, findConversationHeader())
 }
 
 function findFrame() {
@@ -656,6 +738,64 @@ function findFrame() {
       && rect.width >= window.innerWidth * 0.8
       && rect.height >= window.innerHeight * 0.8
   }) ?? null
+}
+
+/** 会话区（frame 的第 2 个轨道列）：侧栏右缘起、宽度最大的内容列。 */
+function findCenterColumn() {
+  if (!frame || !frame.isConnected) return null
+  const frameRect = frame.getBoundingClientRect()
+  const sidebarRect = sidebar ? sidebar.getBoundingClientRect() : { right: 0 }
+  for (const child of frame.children) {
+    const rect = child.getBoundingClientRect()
+    if (rect.left >= sidebarRect.right - 8 && rect.width > 300 && rect.height >= frameRect.height * 0.8) {
+      return child
+    }
+  }
+  return null
+}
+
+/**
+ * 会话区顶部标题行（含 crumb、header actions 与 Session log 等按钮的 header）。
+ * 用语义 <header> + 几何约束定位：位于顶部条带内、宽度覆盖会话区、高度合理；
+ * 滚动体内的 Question/Trajectory 等 header 不满足条带约束，天然排除。
+ */
+function findConversationHeader() {
+  if (!frame || !frame.isConnected) return null
+  const centerCol = findCenterColumn()
+  if (!centerCol) return null
+  const frameRect = frame.getBoundingClientRect()
+  const columnRect = centerCol.getBoundingClientRect()
+  for (const candidate of centerCol.querySelectorAll('header')) {
+    if (!(candidate instanceof HTMLElement)) continue
+    const rect = candidate.getBoundingClientRect()
+    if (rect.width < columnRect.width * 0.6) continue
+    const topOffset = rect.top - frameRect.top
+    if (topOffset < -1 || topOffset > TOP_BORDER_INSET_PX + 40) continue
+    if (rect.height < 20 || rect.height > 140) continue
+    return candidate
+  }
+  return null
+}
+
+/**
+ * 会话列布局根（ConversationRoot 的 flex 列容器）：中心列内第一个
+ * display:flex + flex-direction:column、覆盖绝大部分列面积的容器。
+ * 空会话/hero 阶段它同样在树中（仅内部 header 隐藏），因此顶部条带始终存在。
+ */
+function findConversationRoot() {
+  if (!frame || !frame.isConnected) return null
+  const centerCol = findCenterColumn()
+  if (!centerCol) return null
+  const colRect = centerCol.getBoundingClientRect()
+  for (const candidate of centerCol.querySelectorAll('div')) {
+    const style = getComputedStyle(candidate)
+    if (style.display !== 'flex' || style.flexDirection !== 'column') continue
+    const rect = candidate.getBoundingClientRect()
+    if (rect.width >= colRect.width * 0.6 && rect.height >= colRect.height * 0.6) {
+      return candidate
+    }
+  }
+  return null
 }
 
 function observeLayout(nextFrame) {
@@ -725,16 +865,7 @@ let originalPadding = null
  */
 function findSessionScrollBody() {
   if (!frame || !frame.isConnected) return null
-  const frameRect = frame.getBoundingClientRect()
-  const sidebarRect = sidebar ? sidebar.getBoundingClientRect() : { right: 0 }
-  let centerCol = null
-  for (const child of frame.children) {
-    const rect = child.getBoundingClientRect()
-    if (rect.left >= sidebarRect.right - 8 && rect.width > 300 && rect.height >= frameRect.height * 0.8) {
-      centerCol = child
-      break
-    }
-  }
+  const centerCol = findCenterColumn()
   if (!centerCol) return null
   let best = null
   const scan = (element) => {
@@ -778,12 +909,57 @@ ipcRenderer.on('dsh:panel-inset', (_event, payload) => {
   applyPanelInset()
 })
 
+// ── 页面浮层检测（终端面板悬浮时模态自动收起） ────────────────────────────────
+
+let overlayReported = false
+
+/**
+ * DSH 的浮层宿主：布局框架 grid 子列里 className 含 overlay 的列（实测
+ * `pI_x6G_overlayLayer`，语义名稳定、hash 前缀随构建变化），modal/设置等
+ * 浮层内容渲染在该容器内。
+ */
+function findOverlayHost() {
+  if (!frame || !frame.isConnected) return null
+  for (const child of frame.children) {
+    const cls = String(child.className).toLowerCase()
+    const rect = child.getBoundingClientRect()
+    if (cls.includes('overlay') && rect.width >= innerWidth * 0.5) return child
+  }
+  return null
+}
+
+/** 页面浮层是否存在：overlay 容器有内容，或视口采样命中 frame 外的 portal 层。 */
+function pageHasOverlay() {
+  const overlayHost = findOverlayHost()
+  if (overlayHost && overlayHost.children.length > 0) return true
+  if (!frame || !frame.isConnected) return false
+  // 兜底：9 点采样，命中「frame 外且非本 preload 宿主」的元素视为浮层
+  let hits = 0
+  for (const [xr, yr] of [[0.5, 0.5], [0.05, 0.05], [0.95, 0.05], [0.5, 0.05], [0.05, 0.5], [0.95, 0.5], [0.5, 0.95], [0.05, 0.95], [0.95, 0.95]]) {
+    const el = document.elementFromPoint(innerWidth * xr, innerHeight * yr)
+    if (!el || el === document.documentElement || el === document.body) continue
+    if (frame.contains(el)) continue
+    if (el.closest('#dsh-desktop-dialog-host, #dsh-desktop-window-controls-host')) continue
+    hits += 1
+  }
+  return hits >= 5
+}
+
+/** 浮层状态变化时上报（避免面板显示状态与页面浮层失步）。 */
+function reportOverlayState() {
+  const current = pageHasOverlay()
+  if (current === overlayReported) return
+  overlayReported = current
+  ipcRenderer.send('dsh:overlay-state', { overlay: current })
+}
+
 function updateLayout() {
   scheduled = false
   if (!document.body) return
   if (!frame || !frame.isConnected || !sidebar || !sidebar.isConnected) observeLayout(findFrame())
   applyPanelInset()
   reportContentLayout()
+  reportOverlayState()
   updateDragRegion()
   syncDialogButtonContrast()
 }
@@ -796,6 +972,7 @@ function scheduleLayoutUpdate() {
 
 function start() {
   ensureDragStyle()
+  ensureDragStrip()
   ensureDialogUi()
   ensureWindowControls()
   ipcRenderer.send('dsh:window-controls-ready')

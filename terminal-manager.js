@@ -58,7 +58,14 @@ const RIGHT_DOCK_TOP_INSET = 28
 /** 面板 header 高度（terminal.html 的 .header），用于与 DSH 标题区域底边线对齐。 */
 const PANEL_HEADER_HEIGHT = 34
 
-function createTerminalManager({ getMainWindow, getLocale, getDockMode, setDockMode, appendLog }) {
+function createTerminalManager({
+  getMainWindow,
+  getLocale,
+  getDockMode,
+  setDockMode,
+  appendLog,
+  onPanelVisibleChange,
+}) {
   let panelView = null
   let panelVisible = false
   let resizeTimer = null
@@ -70,10 +77,22 @@ function createTerminalManager({ getMainWindow, getLocale, getDockMode, setDockM
   let dock = 'bottom'
   // 会话区域几何（content-preload 从 DSH 页面观测上报，缺失时回退全宽）
   let layout = null // { sidebarRight, contentRight, headerBottom }
+  // 页面浮层状态（设置面板/弹窗）：浮层出现时自动收起面板，关闭后恢复
+  let overlayOpen = false
+  let reopenedAfterOverlay = false
   const sessions = new Map() // sessionId -> { sessionId, shell, pid }
 
   function log(message) {
     appendLog(`[terminal] ${message}`)
+  }
+
+  /**
+   * 面板可见性翻转后通知外部（main.js 据此刷新窗口按钮的「终端已显示」状态）。
+   * 所有开关路径（窗口按钮、面板收起按钮、Ctrl+` 快捷键、托盘）都汇聚到这里，
+   * 避免某个入口漏刷新导致按钮状态停留在旧值。
+   */
+  function notifyPanelVisibleChange() {
+    if (typeof onPanelVisibleChange === 'function') onPanelVisibleChange(panelVisible)
   }
 
   // ── 面板消息通道 ────────────────────────────────────────────────────────────
@@ -322,6 +341,26 @@ function createTerminalManager({ getMainWindow, getLocale, getDockMode, setDockM
       layout = next
       updatePanelBounds()
     })
+
+    // 页面浮层状态（content-preload 检测：设置面板/弹窗等）
+    // WebContentsView 永远盖在页面之上，浮层出现时工具栏面板会在其下被遮挡——
+    // 自动收起（会话保留），浮层关闭后恢复，与「模态优先」的交互语义一致。
+    ipcMain.on('dsh:overlay-state', (event, payload) => {
+      const win = getMainWindow()
+      if (!win || win.isDestroyed() || event.sender !== win.webContents) return
+      const open = Boolean(payload && payload.overlay)
+      if (open === overlayOpen) return
+      overlayOpen = open
+      if (open && panelVisible) {
+        reopenedAfterOverlay = true
+        hidePanel()
+        log('页面浮层出现，终端面板已自动收起（会话保留）')
+      } else if (!open && reopenedAfterOverlay) {
+        reopenedAfterOverlay = false
+        showPanel()
+        log('页面浮层关闭，终端面板已自动恢复')
+      }
+    })
   }
 
   // ── 面板视图 ────────────────────────────────────────────────────────────────
@@ -407,6 +446,7 @@ function createTerminalManager({ getMainWindow, getLocale, getDockMode, setDockM
     sendToPanel('terminal:focus', {})
     sendToPanel('terminal:dock-state', { mode: dockMode() })
     log('面板已打开')
+    notifyPanelVisibleChange()
     return true
   }
 
@@ -417,6 +457,7 @@ function createTerminalManager({ getMainWindow, getLocale, getDockMode, setDockM
     panelVisible = false
     sendPanelInset()
     log('面板已关闭（会话保留）')
+    notifyPanelVisibleChange()
   }
 
   function togglePanel() {

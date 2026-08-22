@@ -316,6 +316,26 @@ async function main() {
   if (insetAfterHide.b === 0 && insetAfterHide.r === 0) pass('隐藏面板后内缩归零')
   else fail(`隐藏面板后内缩未归零：${JSON.stringify(insetAfterHide)}`)
 
+  // 5.0 页面浮层（设置面板/弹窗）→ 自动收起 → 关闭后自动恢复
+  manager.showPanel()
+  await sleep(400)
+  if (manager.isPanelVisible()) {
+    await win.webContents.executeJavaScript('window.__probe.sendOverlay({ overlay: true })')
+    await sleep(400)
+    if (!manager.isPanelVisible()) pass('页面浮层出现：终端面板自动收起')
+    else fail('页面浮层出现：面板未自动收起')
+    const insetDuringOverlay = await win.webContents.executeJavaScript('Number(document.body.dataset.insetBottom || "0")')
+    if (insetDuringOverlay === 0) pass('浮层期间面板内缩归零')
+    else fail(`浮层期间内缩未归零：${insetDuringOverlay}`)
+    await win.webContents.executeJavaScript('window.__probe.sendOverlay({ overlay: false })')
+    await sleep(400)
+    if (manager.isPanelVisible()) pass('页面浮层关闭：终端面板自动恢复')
+    else fail('页面浮层关闭：面板未自动恢复')
+  } else {
+    fail('浮层测试前置失败：面板未显示')
+  }
+  manager.hidePanel()
+
   // 5.5 会话退出 → 重新打开链路（键盘 exit → 退出态 → 点重新打开 → 新会话 + 提示符）
   manager.showPanel()
   await sleep(500)
