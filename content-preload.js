@@ -913,36 +913,43 @@ ipcRenderer.on('dsh:panel-inset', (_event, payload) => {
 
 let overlayReported = false
 
-/**
- * DSH 的浮层宿主：布局框架 grid 子列里 className 含 overlay 的列（实测
- * `pI_x6G_overlayLayer`，语义名稳定、hash 前缀随构建变化），modal/设置等
- * 浮层内容渲染在该容器内。
- */
-function findOverlayHost() {
-  if (!frame || !frame.isConnected) return null
-  for (const child of frame.children) {
-    const cls = String(child.className).toLowerCase()
-    const rect = child.getBoundingClientRect()
-    if (cls.includes('overlay') && rect.width >= innerWidth * 0.5) return child
-  }
-  return null
-}
+/** 浮层采样点（视口相对坐标）。 */
+const OVERLAY_SAMPLE_POINTS = [
+  [0.5, 0.5], [0.05, 0.05], [0.95, 0.05], [0.5, 0.05], [0.05, 0.5],
+  [0.95, 0.5], [0.5, 0.95], [0.05, 0.95], [0.95, 0.95],
+]
 
-/** 页面浮层是否存在：overlay 容器有内容，或视口采样命中 frame 外的 portal 层。 */
+/**
+ * 页面浮层判定（实测校准）：DSH 的设置面板/弹窗是渲染在 frame 内的定位层
+ * （实测 `VOzbGW_overlay`：position fixed、z-index 1000、覆盖全视口，mask 为其
+ * 子层），不在 overlayLayer 里也不在 body 顶层。判定：9 点采样，命中元素向上
+ * 找祖先链，链上有「覆盖 ≥60% 视口的 fixed/absolute 层」即视为浮层；
+ * 正常内容（滚动体/内容区）祖先链无此类元素，不会误命中。
+ */
 function pageHasOverlay() {
-  const overlayHost = findOverlayHost()
-  if (overlayHost && overlayHost.children.length > 0) return true
   if (!frame || !frame.isConnected) return false
-  // 兜底：9 点采样，命中「frame 外且非本 preload 宿主」的元素视为浮层
   let hits = 0
-  for (const [xr, yr] of [[0.5, 0.5], [0.05, 0.05], [0.95, 0.05], [0.5, 0.05], [0.05, 0.5], [0.95, 0.5], [0.5, 0.95], [0.05, 0.95], [0.95, 0.95]]) {
+  for (const [xr, yr] of OVERLAY_SAMPLE_POINTS) {
     const el = document.elementFromPoint(innerWidth * xr, innerHeight * yr)
     if (!el || el === document.documentElement || el === document.body) continue
-    if (frame.contains(el)) continue
-    if (el.closest('#dsh-desktop-dialog-host, #dsh-desktop-window-controls-host')) continue
-    hits += 1
+    let cur = el
+    let depth = 0
+    let found = false
+    while (cur && cur !== document.body && depth < 12) {
+      const style = getComputedStyle(cur)
+      if (style.position === 'fixed' || style.position === 'absolute') {
+        const rect = cur.getBoundingClientRect()
+        if (rect.width >= innerWidth * 0.6 && rect.height >= innerHeight * 0.6) {
+          found = true
+          break
+        }
+      }
+      cur = cur.parentElement
+      depth += 1
+    }
+    if (found) hits += 1
   }
-  return hits >= 5
+  return hits >= 4
 }
 
 /** 浮层状态变化时上报（避免面板显示状态与页面浮层失步）。 */
