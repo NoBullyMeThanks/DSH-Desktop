@@ -222,6 +222,13 @@
   - 集成冒烟扩展到 **25 项**：会话退出→退出态→重新打开成功；**宿主崩溃（taskkill）→ 主进程收到通知 → 面板错误态 → 重新拉起新宿主+新会话**（实测 pid 13328→21908）；shutdown 后**无孤儿进程**（pid 探测）复查。
   - 单测 **78 项**全过；AGENTS.md 合规复查（打包 files 完整、`'use strict'`/风格、sandbox/contextIsolation/IPC sender 校验）通过。
   - 已提交：`ca2461d feat: 内嵌终端面板`（27 文件，+3707 行；docs/pty-host/terminal-*/workspace-resolver/测试与冒烟脚本、终端页面资源与配置改动）。
+- **四次修正记录（用户实测反馈，已提交 632c9b8 + 本轮）**：
+  1. 右侧停靠顶部对齐改用**标题区 `<header>` 元素的底边**（`findConversationHeader()`，滚动体 top 仅作回退），并在本轮再上移 1px：新增 `RIGHT_DOCK_TOP_OFFSET = 1`，面板 y = `max(28, headerBottom - 1)`——DSH 底边线与面板 header 顶边线各占 1px，上移后两条线完全重叠（不校准则并排成 2px，用户实测仍差 1px）。
+  2. 管理区关闭按钮从 12px 描边叉替换为**垃圾桶**：首次为 12×12 线框 SVG，本轮替换为用户提供的 `resources/lajitong.svg`（bootstrap-icons bi-trash，viewBox 0 0 16 16）同款路径并放大到 12px——填充式矢量（`fill: currentColor`）比 1px 描边更清晰。
+  3. 滚动归属修正：`body`/`.main` 设 `overflow: hidden`，滚动只发生在 xterm 舞台与管理区内部（管理区 `overflow-y: auto`，内容不超阈值不出现滚动条），消除「一条滚动条控制整个区域向下滚」的观感。
+  4. 三条拖动条（resizeH/resizeV/split）悬停色从主题蓝改为深灰 `var(--drag-hover)`（浅色 `rgba(0,0,0,.28)` / 深色 `rgba(255,255,255,.28)`）。
+  5. 右侧停靠面板新增 **1px 左边界线**（`body[data-dock="right"] { border-left: 1px solid var(--border) }`），与 DSH 内容区明确分隔。
+  - 集成冒烟新增两项断言（右停靠左边界线已渲染、关闭按钮为 bi-trash），单测更新 headerBottom 对齐值（70 → 69）。
 
 ## 6. 风险与备选
 

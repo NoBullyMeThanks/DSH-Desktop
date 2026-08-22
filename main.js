@@ -416,8 +416,8 @@ function setupIpc() {
     } else if (action === 'close') {
       mainWindow.close()
     } else if (action === 'terminal') {
+      // 状态刷新由 terminal-manager 的 onPanelVisibleChange 回调统一负责
       terminalManager?.togglePanel()
-      sendWindowControlsState()
     }
   })
 
@@ -1047,7 +1047,6 @@ function openInBrowser() {
 function openTerminal() {
   if (!showMainWindow()) return
   terminalManager?.showPanel()
-  sendWindowControlsState()
 }
 
 function openLog() {
@@ -1105,6 +1104,8 @@ async function startup() {
       appendLog(`[terminal] 停靠偏好 -> ${mode}`)
     },
     appendLog,
+    // 面板可见性所有翻转路径（按钮/快捷键/托盘/面板收起）统一刷新窗口按钮状态
+    onPanelVisibleChange: () => sendWindowControlsState(),
   })
   terminalManager.init()
   setupTray()

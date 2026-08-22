@@ -243,7 +243,9 @@
       const closeBtnEl = document.createElement('button')
       closeBtnEl.className = 'sclose'
       closeBtnEl.title = STR.closeSession
-      closeBtnEl.innerHTML = '<svg viewBox="0 0 12 12" aria-hidden="true"><path d="M2.5 3.5h7M4 3.5v-1h4v1M3.5 3.5l.5 6h4l.5-6M5 5.5v2.5M7 5.5v2.5" /></svg>'
+      // 垃圾桶图标：与 resources/lajitong.svg（bootstrap-icons bi-trash）同款路径，
+      // 填充式矢量（fill: currentColor），与绘制式描边图标不同，放大后依然清晰
+      closeBtnEl.innerHTML = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M5.5 5.5A.5.5 0 0 1 6 6v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5m2.5 0a.5.5 0 0 1 .5.5v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5m3 .5a.5.5 0 0 0-1 0v6a.5.5 0 0 0 1 0z"/><path d="M14.5 3a1 1 0 0 1-1 1H13v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V4h-.5a1 1 0 0 1-1-1V2a1 1 0 0 1 1-1H6a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1h3.5a1 1 0 0 1 1 1zM4.118 4 4 4.059V13a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1V4.059L11.882 4zM2.5 3h11V2h-11z"/></svg>'
       closeBtnEl.addEventListener('click', (event) => {
         event.stopPropagation()
         // 有意关闭：立即从 UI 移除（不等 exit 事件），再请求主进程结束会话

@@ -114,7 +114,10 @@ test('computeDockBounds 右侧：宽度 35%（带上下限 clamp）', () => {
 test('computeDockBounds 右侧：面板顶边与标题区底边线对齐', () => {
   const layout = { sidebarRight: 280, contentRight: 1264, headerBottom: 70 }
   const bounds = utils.computeDockBounds(1264, 735, { dock: 'right', layout })
-  assert.equal(bounds.y, 70) // 面板顶 = headerBottom，顶边线与标题区底线共线
+  // 面板顶 = headerBottom - 1：面板 header 顶边线（1px）与标题区底边线（1px）
+  // 完全重叠（不校准会并排成 2px，实测对齐差 1px）
+  assert.equal(bounds.y, 70 - utils.RIGHT_DOCK_TOP_OFFSET)
+  assert.equal(bounds.height, 735 - bounds.y)
   // headerBottom 缺失 / header 隐藏 → 下限 28（窗口按钮区）
   const fallback = utils.computeDockBounds(1264, 735, { dock: 'right' })
   assert.equal(fallback.y, utils.RIGHT_DOCK_TOP_INSET)

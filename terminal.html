@@ -14,6 +14,8 @@
     --border: rgba(0, 0, 0, 0.08);
     --accent: #4d6bfe;
     --term-bg: #ffffff;
+    /* 拖动条悬停色：不用主题蓝，用户要求偏深的灰色 */
+    --drag-hover: rgba(0, 0, 0, 0.28);
   }
   [data-theme="dark"] {
     --bg: #151517;
@@ -23,6 +25,7 @@
     --border: rgba(255, 255, 255, 0.1);
     --accent: #4d6bfe;
     --term-bg: #151517;
+    --drag-hover: rgba(255, 255, 255, 0.28);
   }
   * { box-sizing: border-box; }
   html, body { height: 100%; margin: 0; }
@@ -37,6 +40,8 @@
        避免出现「一条滚动条控制整个终端区域向下滚动」的观感 */
     overflow: hidden;
   }
+  /* 右侧停靠：面板左边界线（与 DSH 内容区区分开；底部停靠顶边由 .header 提供） */
+  body[data-dock="right"] { border-left: 1px solid var(--border); }
   .header {
     display: flex;
     align-items: center;
@@ -44,7 +49,8 @@
     height: 34px;
     padding: 0 10px 0 14px;
     flex: 0 0 auto;
-    /* 顶边线：右侧停靠时与 DSH 会话区标题区域的底边线共线（面板顶 = headerBottom） */
+    /* 顶边线：右侧停靠时与 DSH 会话区标题区域的底边线重合（面板顶 = headerBottom - 1，
+       两条 1px 线完全重叠才是一条线，见 terminal-utils RIGHT_DOCK_TOP_OFFSET） */
     border-top: 1px solid var(--border);
     border-bottom: 1px solid var(--border);
   }
@@ -54,7 +60,7 @@
     cursor: row-resize;
     background: transparent;
   }
-  #resizeH:hover { background: var(--accent); opacity: 0.35; }
+  #resizeH:hover { background: var(--drag-hover); }
   body[data-dock="right"] #resizeH { display: none; }
   #resizeV {
     width: 6px;
@@ -62,7 +68,7 @@
     cursor: col-resize;
     background: transparent;
   }
-  #resizeV:hover { background: var(--accent); opacity: 0.35; }
+  #resizeV:hover { background: var(--drag-hover); }
   body:not([data-dock="right"]) #resizeV { display: none; }
   .dot {
     width: 8px;
@@ -118,7 +124,7 @@
     cursor: col-resize;
     background: transparent;
   }
-  #split:hover { background: var(--accent); opacity: 0.35; }
+  #split:hover { background: var(--drag-hover); }
   .stage {
     flex: 1;
     min-width: 0;
@@ -213,15 +219,13 @@
     place-items: center;
   }
   .sclose svg {
-    width: 10px;
-    height: 10px;
+    width: 12px;
+    height: 12px;
     overflow: visible;
-    fill: none;
-    stroke: currentColor;
-    stroke-width: 1;
-    stroke-linejoin: round;
-    stroke-linecap: round;
-    vector-effect: non-scaling-stroke;
+    /* Bootstrap 垃圾桶（bootstrap-icons bi-trash）：填充式矢量，不描边，
+       比 1px 描边图标更清晰；尺寸从 10px 放大到 12px */
+    fill: currentColor;
+    stroke: none;
   }
   .sclose:hover { color: #d64545; }
   .sessions-empty {

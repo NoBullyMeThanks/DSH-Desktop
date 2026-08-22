@@ -22,6 +22,10 @@ const RIGHT_DOCK_MIN_WIDTH = 320
 const RIGHT_DOCK_MAX_RATIO = 0.6
 /** 右侧停靠时顶部让出的最小高度（窗口按钮区，WebContentsView 永远盖在页面之上）。 */
 const RIGHT_DOCK_TOP_INSET = 28
+/** 右侧停靠时面板顶边的像素校准：DSH 标题区底边线占 1px（[bottom-1, bottom)），
+ *  面板顶边若直接取 headerBottom，其 header 顶边线会落在 [bottom, bottom+1)，
+ *  两条线并排成 2px、无法重合。上移 1px 后两条线完全重叠，视觉上是一条线。 */
+const RIGHT_DOCK_TOP_OFFSET = 1
 /** 面板 header 高度（terminal.html 的 .header），用于与 DSH 标题区域底边线对齐。 */
 const PANEL_HEADER_HEIGHT = 34
 
@@ -99,7 +103,7 @@ function computeDockBounds(width, height, options = {}) {
     const headerBottom = layout && Number.isFinite(layout.headerBottom)
       ? Math.max(0, layout.headerBottom)
       : 0
-    const topY = Math.max(RIGHT_DOCK_TOP_INSET, headerBottom)
+    const topY = Math.max(RIGHT_DOCK_TOP_INSET, headerBottom - RIGHT_DOCK_TOP_OFFSET)
     return { x: width - panelWidth, y: topY, width: panelWidth, height: height - topY }
   }
   // 底部：贴齐会话区域（侧栏右缘 → 内容右缘），侧栏收缩时自动延伸
@@ -125,6 +129,7 @@ module.exports = {
   RIGHT_DOCK_MIN_WIDTH,
   RIGHT_DOCK_MAX_RATIO,
   RIGHT_DOCK_TOP_INSET,
+  RIGHT_DOCK_TOP_OFFSET,
   PANEL_HEADER_HEIGHT,
   detectShell,
   computePanelBounds,

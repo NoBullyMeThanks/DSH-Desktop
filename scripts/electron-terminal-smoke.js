@@ -196,20 +196,24 @@ async function main() {
     const [cw, ch] = win.getContentSize()
     const panelH = Math.min(Math.max(Math.round(ch * 0.35), 160), Math.round(ch * 0.7))
     const panelW = Math.round(Math.min(Math.max(cw * 0.35, 320), cw * 0.6))
-    // headerBottom=70：右侧面板顶边 y = max(28, 70) = 70（面板顶 = 标题区底边线，面板 header 顶边有线）
+    // headerBottom=70：右侧面板顶边 y = max(28, 70-1) = 69（面板顶边线与标题区底边线重合）
     await win.webContents.executeJavaScript(`window.__probe.sendLayout({ sidebarRight: 240, contentRight: ${cw}, headerBottom: 70 })`)
     await sleep(300)
     await assertBounds({ x: 240, y: ch - panelH, width: cw - 240, height: panelH }, '贴齐会话区域')
     manager.setDock('right')
     await sleep(300)
-    await assertBounds({ x: cw - panelW, y: 70, width: panelW, height: ch - 70 }, '右侧停靠（面板顶边与标题区底边线对齐）')
+    await assertBounds({ x: cw - panelW, y: 69, width: panelW, height: ch - 69 }, '右侧停靠（面板顶边线与标题区底边线重合）')
+    // 右停靠时面板左侧应有 1px 边界线（与 DSH 内容区分开）
+    const leftBorderWidth = await panel.webContents.executeJavaScript('getComputedStyle(document.body).borderLeftWidth')
+    if (leftBorderWidth === '1px') pass('右侧停靠：面板左边界线已渲染')
+    else fail(`右侧停靠：面板左边界线宽度为 ${leftBorderWidth}，期望 1px`)
     const insetRight = await win.webContents.executeJavaScript('({ b: Number(document.body.dataset.insetBottom || "0"), r: Number(document.body.dataset.insetRight || "0") })')
     if (insetRight.r === panelW && insetRight.b === 0) pass(`右侧内缩已下发：right=${panelW}px`)
     else fail(`右侧内缩值不符：${JSON.stringify(insetRight)}，期望 right=${panelW},bottom=0`)
     // 拖动调整：右侧模式向左拖 60px → 宽度变小；反向恢复
     await panel.webContents.executeJavaScript('window.__terminalBridge.panelResize({ dx: -60, dy: 0 })')
     await sleep(300)
-    await assertBounds({ x: cw - (panelW - 60), y: 70, width: panelW - 60, height: ch - 70 }, '右侧拖动调整宽度')
+    await assertBounds({ x: cw - (panelW - 60), y: 69, width: panelW - 60, height: ch - 69 }, '右侧拖动调整宽度')
     await panel.webContents.executeJavaScript('window.__terminalBridge.panelResize({ dx: 60, dy: 0 })')
     await sleep(300)
     manager.setDock('bottom')
@@ -408,6 +412,16 @@ async function main() {
       const multi = await panel3.webContents.executeJavaScript('window.__getTermState()')
       if (multi.panes.length === 2) pass('管理区显示两个终端')
       else fail(`管理区终端数量不符：${multi.panes.length}`)
+      // 关闭按钮应为 Bootstrap 垃圾桶（viewBox 0 0 16 16，填充式、无描边；
+      // 注意 computed fill 会把 currentColor 解析为实际颜色，只断言非 none/无描边）
+      const scloseSvg = await panel3.webContents.executeJavaScript(`(() => {
+        const svg = document.querySelector('.session-item .sclose svg')
+        if (!svg) return null
+        const s = getComputedStyle(svg)
+        return { viewBox: svg.getAttribute('viewBox'), fill: s.fill, stroke: s.stroke }
+      })()`)
+      if (scloseSvg && scloseSvg.viewBox === '0 0 16 16' && scloseSvg.fill !== 'none' && scloseSvg.stroke === 'none') pass('关闭按钮已替换为垃圾桶图标（bi-trash）')
+      else fail(`关闭按钮图标不符：${JSON.stringify(scloseSvg)}`)
       // 切回第一个会话
       await panel3.webContents.executeJavaScript(`(() => {
         const list = document.querySelectorAll('.session-item')
