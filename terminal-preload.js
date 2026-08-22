@@ -18,6 +18,10 @@ contextBridge.exposeInMainWorld('__terminalBridge', {
   kill: (sessionId) => ipcRenderer.send('terminal:kill', { sessionId }),
   /** 切换停靠模式（'bottom' | 'right'）。 */
   setDock: (mode) => ipcRenderer.send('terminal:set-dock', mode),
+  /** 激活指定会话（多终端切换）。 */
+  activate: (sessionId) => ipcRenderer.send('terminal:activate', { sessionId }),
+  /** 重命名会话。 */
+  rename: (sessionId, name) => ipcRenderer.send('terminal:rename', { sessionId, name }),
   /** 请求主进程收起面板（标题栏关闭按钮）。 */
   togglePanel: () => ipcRenderer.send('terminal:toggle-panel'),
   /** 订阅主进程事件；返回取消订阅函数。 */

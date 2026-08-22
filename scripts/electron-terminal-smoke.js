@@ -271,7 +271,7 @@ async function main() {
       try {
         // 期望值：面板当前主题背景色（面板已跟随深浅色，不再固定白色）
         const expectedBg = await panel2.webContents.executeJavaScript(`(() => {
-          const s = getComputedStyle(document.getElementById('terminal')).backgroundColor
+          const s = getComputedStyle(document.getElementById('stage')).backgroundColor
           const m = s.match(/rgba?\\((\\d+), (\\d+), (\\d+)/)
           return m ? [Number(m[1]), Number(m[2]), Number(m[3])] : [255, 255, 255]
         })()`)
@@ -346,18 +346,18 @@ async function main() {
     }
     panel3.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'Return' })
     panel3.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'Return' })
-    // 退出态：reopen 按钮可见（PowerShell 退出耗时不定，轮询）
+    // 退出态：pane 内退出条出现（PowerShell 退出耗时不定，轮询）
     let exited = false
     const exitDeadline = Date.now() + 15_000
     while (Date.now() < exitDeadline) {
-      exited = await panel3.webContents.executeJavaScript('document.body.dataset.exited === "true"')
+      exited = await panel3.webContents.executeJavaScript('window.__getTermState().exited')
       if (exited) break
       await sleep(300)
     }
     if (exited) pass('会话退出后进入退出态（重新打开按钮可见）')
     else fail('会话退出后未进入退出态')
-    // 点重新打开 → 新会话
-    await panel3.webContents.executeJavaScript('document.getElementById("reopenBtn").click()')
+    // 点重新打开（pane 内退出条按钮）→ 新会话
+    await panel3.webContents.executeJavaScript('document.querySelector(".term-pane.exited .term-exitbar button").click()')
     await waitForPanelText(
       panel3,
       (t) => t.includes('PS ') || t.includes('>'),
@@ -367,6 +367,78 @@ async function main() {
       () => pass('会话退出后重新打开成功（新会话 + 提示符）'),
       (err) => fail(err.message),
     )
+    // 清理重开前的退出态 pane，恢复单会话基线
+    await panel3.webContents.executeJavaScript(`(() => {
+      const items = document.querySelectorAll('.session-item.exited')
+      if (items.length) items[items.length - 1].querySelector('.sclose').click()
+    })()`)
+    const cleanDeadline = Date.now() + 15_000
+    let cleaned = false
+    while (Date.now() < cleanDeadline) {
+      const state = await panel3.webContents.executeJavaScript('window.__getTermState()')
+      if (state.panes.length === 1) { cleaned = true; break }
+      await sleep(300)
+    }
+    if (!cleaned) fail('清理退出态 pane 失败，跳过多终端测试')
+    // 5.55 多终端管理：新建 → 两个 pane → 切换 → 重命名 → 关闭
+    const paneCountBefore = cleaned ? await panel3.webContents.executeJavaScript('window.__getTermState().panes.length') : 0
+    if (paneCountBefore === 1) {
+      await panel3.webContents.executeJavaScript('document.getElementById("newBtn").click()')
+      await waitForPanelText(
+        panel3,
+        (t) => t.includes('PS ') || t.includes('>'),
+        30_000,
+        '第二个会话提示符',
+      ).then(
+        () => pass('新建终端成功（第二个会话出现）'),
+        (err) => fail(err.message),
+      )
+      const multi = await panel3.webContents.executeJavaScript('window.__getTermState()')
+      if (multi.panes.length === 2) pass('管理区显示两个终端')
+      else fail(`管理区终端数量不符：${multi.panes.length}`)
+      // 切回第一个会话
+      await panel3.webContents.executeJavaScript(`(() => {
+        const list = document.querySelectorAll('.session-item')
+        list[0] && list[0].click()
+      })()`)
+      await sleep(500)
+      const switched = await panel3.webContents.executeJavaScript('window.__getTermState()')
+      if (switched.active === multi.panes[0]) pass('切换到第一个终端成功')
+      else fail(`切换失败：active=${switched.active}`)
+      // 重命名第一个会话
+      await panel3.webContents.executeJavaScript(`(() => {
+        const item = document.querySelectorAll('.session-item')[0]
+        const nameEl = item.querySelector('.sname')
+        nameEl.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))
+        const input = item.querySelector('.sname-input')
+        input.value = 'dev-shell'
+        input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+      })()`)
+      await sleep(500)
+      const renamed = await panel3.webContents.executeJavaScript(`(() => {
+        const item = document.querySelectorAll('.session-item')[0]
+        return item ? item.querySelector('.sname').textContent : ''
+      })()`)
+      if (renamed === 'dev-shell') pass('会话重命名成功（dev-shell）')
+      else fail(`重命名结果不符：${renamed}`)
+      // 真正关闭第二个会话 → 列表剩 1
+      await panel3.webContents.executeJavaScript(`(() => {
+        const items = document.querySelectorAll('.session-item')
+        const closeBtn = items[items.length - 1].querySelector('.sclose')
+        closeBtn.click()
+      })()`)
+      const closeDeadline = Date.now() + 15_000
+      let closed = false
+      while (Date.now() < closeDeadline) {
+        const state = await panel3.webContents.executeJavaScript('window.__getTermState()')
+        if (state.panes.length === 1) { closed = true; break }
+        await sleep(300)
+      }
+      if (closed) pass('真正关闭终端成功（列表移除、资源释放）')
+      else fail('关闭终端后列表未收敛')
+    } else {
+      fail(`多终端测试前置失败：pane 数=${paneCountBefore}`)
+    }
     // 5.6 宿主崩溃 → 面板错误态 → 重新拉起宿主与会话
     const hostPidBefore = findHostPid()
     if (hostPidBefore) {
@@ -378,13 +450,14 @@ async function main() {
       let down = false
       const downDeadline = Date.now() + 10_000
       while (Date.now() < downDeadline) {
-        down = await panel3.webContents.executeJavaScript('document.body.dataset.exited === "true"')
+        // 宿主崩溃 → 会话列表清空 → pane 全部移除
+        down = await panel3.webContents.executeJavaScript('window.__getTermState().panes.length === 0')
         if (down) break
         await sleep(300)
       }
       if (down) pass('宿主崩溃后面板进入错误态')
       else fail('宿主崩溃后面板未进入错误态')
-      await panel3.webContents.executeJavaScript('document.getElementById("reopenBtn").click()')
+      await panel3.webContents.executeJavaScript('document.getElementById("newBtn").click()')
       await waitForLog(/会话 [0-9a-f-]+ 已创建/, 30_000, '宿主重启后的会话').then(
         () => pass('宿主崩溃后重新拉起成功（新宿主 + 新会话）'),
         (err) => fail(err.message),

@@ -80,7 +80,10 @@ function createTerminalManager({
   // 页面浮层状态（设置面板/弹窗）：浮层出现时自动收起面板，关闭后恢复
   let overlayOpen = false
   let reopenedAfterOverlay = false
-  const sessions = new Map() // sessionId -> { sessionId, shell, pid }
+  // 多会话：当前激活的会话 id（面板展示的 pane），命名序号
+  let activeSessionId = null
+  let sessionSequence = 0
+  const sessions = new Map() // sessionId -> { sessionId, shell, pid, name }
 
   function log(message) {
     appendLog(`[terminal] ${message}`)
@@ -120,6 +123,9 @@ function createTerminalManager({
       close: t(locale, 'terminalClose'),
       dockBottom: t(locale, 'terminalDockBottom'),
       dockRight: t(locale, 'terminalDockRight'),
+      newSession: t(locale, 'terminalNewSession'),
+      closeSession: t(locale, 'terminalCloseSession'),
+      renameHint: t(locale, 'terminalRenameHint'),
     }
   }
 
@@ -200,12 +206,16 @@ function createTerminalManager({
       }
       client.onExit = ({ sessionId, code }) => {
         sessions.delete(sessionId)
+        if (activeSessionId === sessionId) activeSessionId = null
         sendToPanel('terminal:exit', { sessionId, code })
+        broadcastSessions()
       }
       client.onClosed = (code) => {
         log(`终端宿主退出（code ${code}），全部会话失效`)
         sessions.clear()
+        activeSessionId = null
         hostClient = null
+        broadcastSessions()
         if (!disposed) sendToPanel('terminal:host-state', { state: 'down', message: '终端服务已停止' })
       }
       try {
@@ -237,12 +247,33 @@ function createTerminalManager({
     return os.homedir()
   }
 
+  /** 新会话默认名称：终端 1、终端 2…（随 locale 文案）。 */
+  function nextSessionName() {
+    sessionSequence += 1
+    const locale = typeof getLocale === 'function' ? getLocale() : 'zh'
+    return t(locale, 'terminalSessionName', { n: sessionSequence })
+  }
+
+  /** 会话列表广播：面板据此维护右侧管理区（列表/激活态/命名）。 */
+  function broadcastSessions() {
+    sendToPanel('terminal:sessions', {
+      activeSessionId,
+      sessions: Array.from(sessions.values()).map((session) => ({
+        sessionId: session.sessionId,
+        name: session.name,
+        shell: session.shell,
+        pid: session.pid,
+      })),
+    })
+  }
+
   async function spawnSession() {
     const client = await ensureHost()
     if (!client) return { ok: false, error: '终端服务不可用' }
     const sessionId = crypto.randomUUID()
     const shell = utils.detectShell()
     const cwd = defaultSessionCwd()
+    const name = nextSessionName()
     try {
       const res = await client.request('spawn', {
         sessionId,
@@ -252,9 +283,10 @@ function createTerminalManager({
         rows: INITIAL_ROWS,
       })
       if (!res.ok) return { ok: false, error: res.error || '创建会话失败' }
-      sessions.set(sessionId, { sessionId, shell, pid: res.pid })
-      log(`会话 ${sessionId} 已创建（shell=${shell}, cwd=${cwd}）`)
-      return { ok: true, sessionId, shell, pid: res.pid }
+      sessions.set(sessionId, { sessionId, shell, pid: res.pid, name })
+      activeSessionId = sessionId
+      log(`会话 ${sessionId} 已创建（shell=${shell}, cwd=${cwd}, name=${name}）`)
+      return { ok: true, sessionId, shell, pid: res.pid, name }
     } catch (err) {
       log(`创建会话失败：${err.message}`)
       return { ok: false, error: err.message }
@@ -271,7 +303,8 @@ function createTerminalManager({
       sendToPanel('terminal:host-state', { state })
       void spawnSession().then((result) => {
         if (result.ok) {
-          sendToPanel('terminal:spawned', { sessionId: result.sessionId, shell: result.shell, pid: result.pid })
+          sendToPanel('terminal:spawned', { sessionId: result.sessionId, shell: result.shell, pid: result.pid, name: result.name })
+          broadcastSessions()
         } else {
           sendToPanel('terminal:error', { message: result.error })
         }
@@ -282,7 +315,8 @@ function createTerminalManager({
       if (!isPanelSender(event)) return
       void spawnSession().then((result) => {
         if (result.ok) {
-          sendToPanel('terminal:spawned', { sessionId: result.sessionId, shell: result.shell, pid: result.pid })
+          sendToPanel('terminal:spawned', { sessionId: result.sessionId, shell: result.shell, pid: result.pid, name: result.name })
+          broadcastSessions()
         } else {
           sendToPanel('terminal:error', { message: result.error })
         }
@@ -309,6 +343,26 @@ function createTerminalManager({
       const { sessionId } = payload || {}
       if (!utils.validSessionId(sessionId) || !sessions.has(sessionId)) return
       void hostClient?.killSession(sessionId).catch(() => {})
+    })
+
+    ipcMain.on('terminal:activate', (event, payload) => {
+      if (!isPanelSender(event)) return
+      const { sessionId } = payload || {}
+      if (!utils.validSessionId(sessionId) || !sessions.has(sessionId)) return
+      if (activeSessionId === sessionId) return
+      activeSessionId = sessionId
+      broadcastSessions()
+    })
+
+    ipcMain.on('terminal:rename', (event, payload) => {
+      if (!isPanelSender(event)) return
+      const { sessionId, name } = payload || {}
+      if (!utils.validSessionId(sessionId) || !sessions.has(sessionId)) return
+      const normalized = typeof name === 'string' ? name.trim().slice(0, 32) : ''
+      if (!normalized) return
+      sessions.get(sessionId).name = normalized
+      log(`会话 ${sessionId} 重命名为 ${normalized}`)
+      broadcastSessions()
     })
 
     ipcMain.on('terminal:toggle-panel', (event) => {

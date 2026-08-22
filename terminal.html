@@ -69,11 +69,9 @@
   }
   button:hover { background: var(--bg-secondary); }
   button:disabled { opacity: 0.4; cursor: default; }
-  #reopenBtn { display: none; color: var(--accent); }
-  body[data-exited="true"] #reopenBtn { display: inline-block; }
   .dock-btn { min-width: 24px; padding: 0 5px; display: grid; place-items: center; }
   .dock-btn.active { color: var(--accent); }
-  .dock-btn svg {
+  .dock-btn svg, #newBtn svg {
     width: 11px;
     height: 11px;
     overflow: visible;
@@ -84,25 +82,110 @@
     stroke-linecap: round;
     vector-effect: non-scaling-stroke;
   }
+  #newBtn { min-width: 24px; padding: 0 5px; display: grid; place-items: center; }
   #closeBtn { min-width: 24px; font-size: 12px; }
-  #terminal {
+
+  .main {
     flex: 1;
     min-height: 0;
-    padding: 6px 0 0 8px;
-    overflow: hidden;
+    display: flex;
+  }
+  .stage {
+    flex: 1;
+    min-width: 0;
+    position: relative;
     /* 与 xterm 主题背景同色（terminal.js 按主题同步 --term-bg）：
        fit 取整余量与切换瞬间的裁切区不可见，避免露出异色条/块 */
     background: var(--term-bg, #ffffff);
   }
-  #terminal .xterm {
-    height: 100%;
+  .term-pane {
+    position: absolute;
+    inset: 0;
+    display: none;
+    padding: 6px 0 0 8px;
   }
-  #terminal .xterm .xterm-viewport {
+  .term-pane.active { display: block; }
+  .term-pane .xterm { height: 100%; }
+  .term-pane .xterm .xterm-viewport {
     scrollbar-width: thin;
     /* xterm.css 缺省把 viewport 背景写成纯黑且它比屏幕层高几个像素——
-       底部露出的黑色区域就是黑色横条（用户实测两种停靠都有）。
-       改为随主题背景色，与显示区域融为一体。 */
+       底部露出的黑色区域就是黑色横条。改为随主题背景色，与显示区域融为一体。 */
     background-color: var(--term-bg, #ffffff) !important;
+  }
+  .term-exitbar {
+    display: none;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 12px;
+    border-top: 1px solid var(--border);
+    color: var(--fg-secondary);
+    font-size: 11px;
+  }
+  .term-pane.exited .term-exitbar { display: flex; }
+  .term-pane.exited .xterm { opacity: 0.6; }
+
+  .sessions {
+    width: 170px;
+    flex: 0 0 auto;
+    overflow-y: auto;
+    border-left: 1px solid var(--border);
+    background: var(--bg-secondary);
+    padding: 6px;
+  }
+  .session-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-height: 28px;
+    padding: 0 4px 0 8px;
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 12px;
+    color: var(--fg);
+    white-space: nowrap;
+  }
+  .session-item:hover { background: var(--bg); }
+  .session-item.active {
+    background: var(--bg);
+    box-shadow: inset 2px 0 0 var(--accent);
+  }
+  .session-item.exited .sname, .session-item.exited .sdot { opacity: 0.5; }
+  .sdot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: #2fae5f;
+    flex: 0 0 auto;
+  }
+  .sdot.exited { background: var(--fg-secondary); }
+  .sname { flex: 1; overflow: hidden; text-overflow: ellipsis; }
+  .sname-input {
+    flex: 1;
+    min-width: 0;
+    height: 20px;
+    padding: 0 4px;
+    border: 1px solid var(--accent);
+    border-radius: 5px;
+    background: var(--bg);
+    color: var(--fg);
+    font-size: 12px;
+    outline: none;
+  }
+  .sclose {
+    min-width: 18px;
+    width: 18px;
+    height: 18px;
+    padding: 0;
+    font-size: 12px;
+    flex: 0 0 auto;
+    color: var(--fg-secondary);
+  }
+  .sclose:hover { color: #d64545; }
+  .sessions-empty {
+    padding: 10px 8px;
+    font-size: 11px;
+    color: var(--fg-secondary);
+    text-align: center;
   }
   #status {
     padding: 3px 14px;
@@ -118,7 +201,9 @@
     <span class="dot" id="dot"></span>
     <span class="title" id="title">终端</span>
     <div class="spacer"></div>
-    <button id="reopenBtn">重新打开</button>
+    <button id="newBtn" title="新建终端">
+      <svg viewBox="0 0 12 12" aria-hidden="true"><path d="M6 2.5v7M2.5 6h7" /></svg>
+    </button>
     <button id="dockBottomBtn" class="dock-btn" title="停靠到底部">
       <svg viewBox="0 0 12 12" aria-hidden="true"><rect x="2" y="2" width="8" height="8" rx="1.5" /><path d="M4 8h4" /></svg>
     </button>
@@ -127,7 +212,12 @@
     </button>
     <button id="closeBtn" title="收起面板">✕</button>
   </div>
-  <div id="terminal"></div>
+  <div class="main">
+    <div class="stage" id="stage"></div>
+    <div class="sessions" id="sessions">
+      <div class="sessions-empty" id="sessionsEmpty">正在连接…</div>
+    </div>
+  </div>
   <div class="status" id="status">正在连接…</div>
   <script src="terminal-assets/xterm.js"></script>
   <script src="terminal-assets/addon-fit.js"></script>

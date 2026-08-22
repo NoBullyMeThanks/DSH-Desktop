@@ -1,10 +1,9 @@
 (() => {
   'use strict'
   /**
-   * 终端面板页面逻辑（M3：xterm.js 渲染）。
-   * xterm 6 的 UMD 构建把导出展开到全局（Terminal/FitAddon/ClipboardAddon），
-   * 由 terminal.html 在 terminal.js 之前以经典 <script> 引入。
-   * 面板页是本地页面，仅通过 window.__terminalBridge 与主进程通信。
+   * 终端面板页面逻辑（多终端）：xterm 每个会话一个 pane，右侧管理区负责
+   * 切换/重命名/关闭/新建。xterm 6 的 UMD 构建把导出展开到全局
+   * （Terminal/FitAddon/ClipboardAddon），由 terminal.html 以经典 <script> 引入。
    *
    * 注意：'use strict' 必须放在函数体内——沙箱渲染进程经自定义 scheme 加载
    * 经典脚本时，顶层指令会被当作表达式求值（实测报 "use strict" is not a
@@ -20,13 +19,13 @@
   const dot = document.getElementById('dot')
   const titleEl = document.getElementById('title')
   const statusEl = document.getElementById('status')
-  const reopenBtn = document.getElementById('reopenBtn')
+  const newBtn = document.getElementById('newBtn')
   const dockBottomBtn = document.getElementById('dockBottomBtn')
   const dockRightBtn = document.getElementById('dockRightBtn')
   const closeBtn = document.getElementById('closeBtn')
-  const container = document.getElementById('terminal')
-
-  let sessionId = null
+  const stage = document.getElementById('stage')
+  const sessionsEl = document.getElementById('sessions')
+  const sessionsEmpty = document.getElementById('sessionsEmpty')
 
   // ── 文案（主进程按 locale 下发，缺省回退中文） ──────────────────────────────
   const DEFAULT_STRINGS = {
@@ -41,6 +40,10 @@
     close: '收起面板',
     dockBottom: '停靠到底部',
     dockRight: '停靠到右侧',
+    newSession: '新建终端',
+    closeSession: '关闭终端',
+    renameHint: '双击重命名',
+    emptySessions: '暂无终端',
   }
   let STR = { ...DEFAULT_STRINGS }
 
@@ -102,59 +105,198 @@
     },
   }
 
-  // ── 终端实例 ────────────────────────────────────────────────────────────────
-  let term = null
-  let fitAddon = null
-  // 最近一次收到/默认的深色状态：spawned 可能先于 appearance 到达，
-  // xterm 创建必须用当前状态初始化主题，避免先白后黑（用户实测反馈）。
+  // ── 多会话状态 ──────────────────────────────────────────────────────────────
+  // sessionId -> { sessionId, term, fitAddon, pane, exitBar, reopenBtn, exited }
+  const panes = new Map()
+  const sessionNames = new Map() // 广播数据里的名称（管理区展示）
+  let activeSessionId = null
   let currentDark = false
 
-  function initTerminal() {
-    if (term) return
-    if (typeof Terminal !== 'function' || !FitAddonCtor) {
-      setStatus(STR.hostFailed, 'error')
-      return
+  // ── 终端实例 ────────────────────────────────────────────────────────────────
+
+  function createPane(sessionId) {
+    let entry = panes.get(sessionId)
+    if (entry) return entry
+
+    const pane = document.createElement('div')
+    pane.className = 'term-pane'
+    stage.appendChild(pane)
+
+    const viewport = document.createElement('div')
+    pane.appendChild(viewport)
+
+    const exitBar = document.createElement('div')
+    exitBar.className = 'term-exitbar'
+    const exitText = document.createElement('span')
+    exitText.textContent = STR.exited
+    const reopenBtn = document.createElement('button')
+    reopenBtn.textContent = STR.reopen
+    reopenBtn.addEventListener('click', () => bridge.spawn())
+    exitBar.appendChild(exitText)
+    exitBar.appendChild(reopenBtn)
+    pane.appendChild(exitBar)
+
+    let term = null
+    let fitAddon = null
+    if (typeof Terminal === 'function' && FitAddonCtor) {
+      term = new Terminal({
+        fontFamily: '"Cascadia Mono", Consolas, "Microsoft YaHei UI Mono", monospace',
+        fontSize: 13,
+        lineHeight: 1.25,
+        cursorBlink: true,
+        scrollback: 2000,
+        allowProposedApi: true,
+        theme: THEMES[currentDark ? 'dark' : 'light'],
+      })
+      fitAddon = new FitAddonCtor()
+      term.loadAddon(fitAddon)
+      if (ClipboardAddonCtor) term.loadAddon(new ClipboardAddonCtor())
+      term.open(viewport)
+      term.onData((data) => bridge.sendInput(sessionId, data))
     }
-    term = new Terminal({
-      fontFamily: '"Cascadia Mono", Consolas, "Microsoft YaHei UI Mono", monospace',
-      fontSize: 13,
-      lineHeight: 1.25,
-      cursorBlink: true,
-      scrollback: 2000,
-      allowProposedApi: true,
-      theme: THEMES[currentDark ? 'dark' : 'light'],
-    })
-    fitAddon = new FitAddonCtor()
-    term.loadAddon(fitAddon)
-    if (ClipboardAddonCtor) term.loadAddon(new ClipboardAddonCtor())
 
-    term.open(container)
-    term.onData((data) => {
-      if (sessionId) bridge.sendInput(sessionId, data)
-    })
-
-    scheduleFit()
+    entry = { sessionId, term, fitAddon, pane, exitBar, reopenBtn, exited: false }
+    panes.set(sessionId, entry)
+    return entry
   }
 
-  /** fit 后按 xterm 实际列数/行数上报（比估算可靠）。 */
-  function reportSize() {
-    if (!term || !fitAddon) return
-    try {
-      fitAddon.fit()
-    } catch {}
-    if (sessionId) bridge.resize(sessionId, term.cols, term.rows)
+  function removePane(sessionId) {
+    const entry = panes.get(sessionId)
+    if (!entry) return
+    if (entry.term) {
+      try { entry.term.dispose() } catch {}
+    }
+    entry.pane.remove()
+    panes.delete(sessionId)
   }
 
-  let fitTimer = null
-  function scheduleFit() {
-    clearTimeout(fitTimer)
-    fitTimer = setTimeout(reportSize, 100)
+  /** 激活会话：显示对应 pane，其余隐藏；激活侧的 xterm 重新 fit。 */
+  function activatePane(sessionId) {
+    activeSessionId = sessionId
+    for (const [id, entry] of panes) {
+      entry.pane.classList.toggle('active', id === sessionId)
+    }
+    const entry = panes.get(sessionId)
+    if (entry && entry.term && entry.fitAddon) {
+      scheduleFitPane(entry)
+      entry.term.focus()
+    }
+    renderSessionsList(sessionId)
+  }
+
+  function fitPane(entry) {
+    if (!entry || !entry.term || !entry.fitAddon) return
+    if (entry.pane.classList.contains('active')) {
+      try { entry.fitAddon.fit() } catch {}
+      bridge.resize(entry.sessionId, entry.term.cols, entry.term.rows)
+    }
+  }
+
+  const fitTimers = new Map()
+  function scheduleFitPane(entry) {
+    clearTimeout(fitTimers.get(entry.sessionId))
+    fitTimers.set(entry.sessionId, setTimeout(() => fitPane(entry), 100))
   }
 
   if (typeof ResizeObserver !== 'undefined') {
-    new ResizeObserver(scheduleFit).observe(container)
+    new ResizeObserver(() => {
+      const entry = panes.get(activeSessionId)
+      if (entry) scheduleFitPane(entry)
+    }).observe(stage)
   }
-  window.addEventListener('resize', scheduleFit)
+  window.addEventListener('resize', () => {
+    const entry = panes.get(activeSessionId)
+    if (entry) scheduleFitPane(entry)
+  })
+
+  // ── 管理区列表 ──────────────────────────────────────────────────────────────
+
+  function renderSessionsList(activeId) {
+    sessionsEl.querySelectorAll('.session-item').forEach((item) => item.remove())
+    const items = Array.from(panes.values())
+    if (items.length === 0) {
+      sessionsEmpty.style.display = 'block'
+      sessionsEmpty.textContent = STR.emptySessions
+      return
+    }
+    sessionsEmpty.style.display = 'none'
+    for (const entry of items) {
+      const item = document.createElement('div')
+      item.className = 'session-item'
+      item.dataset.sessionId = entry.sessionId
+      if (entry.sessionId === activeId) item.classList.add('active')
+      if (entry.exited) item.classList.add('exited')
+
+      const sdot = document.createElement('span')
+      sdot.className = 'sdot'
+      if (entry.exited) sdot.classList.add('exited')
+
+      const nameEl = document.createElement('span')
+      nameEl.className = 'sname'
+      nameEl.title = STR.renameHint
+      nameEl.textContent = sessionNames.get(entry.sessionId) || STR.title
+
+      const closeBtnEl = document.createElement('button')
+      closeBtnEl.className = 'sclose'
+      closeBtnEl.title = STR.closeSession
+      closeBtnEl.textContent = '×'
+      closeBtnEl.addEventListener('click', (event) => {
+        event.stopPropagation()
+        // 有意关闭：立即从 UI 移除（不等 exit 事件），再请求主进程结束会话
+        removePane(entry.sessionId)
+        renderSessionsList(activeSessionId)
+        bridge.kill(entry.sessionId)
+      })
+
+      item.appendChild(sdot)
+      item.appendChild(nameEl)
+      item.appendChild(closeBtnEl)
+
+      item.addEventListener('click', () => {
+        if (entry.exited) return
+        activatePane(entry.sessionId)
+        bridge.activate(entry.sessionId)
+      })
+      nameEl.addEventListener('dblclick', (event) => {
+        event.stopPropagation()
+        startRename(item, nameEl, entry)
+      })
+
+      sessionsEl.appendChild(item)
+    }
+  }
+
+  /** 双击重命名：名称换成输入框，Enter 提交 / Esc 取消 / 失焦提交。 */
+  function startRename(item, nameEl, entry) {
+    if (entry.exited) return
+    const input = document.createElement('input')
+    input.className = 'sname-input'
+    input.value = sessionNames.get(entry.sessionId) || STR.title
+    item.replaceChild(input, nameEl)
+    input.focus()
+    input.select()
+    let done = false
+    const commit = () => {
+      if (done) return
+      done = true
+      const name = input.value.trim().slice(0, 32)
+      if (name && name !== sessionNames.get(entry.sessionId)) {
+        sessionNames.set(entry.sessionId, name)
+        bridge.rename(entry.sessionId, name)
+      }
+      renderSessionsList(entry.sessionId)
+    }
+    const cancel = () => {
+      if (done) return
+      done = true
+      renderSessionsList(entry.sessionId)
+    }
+    input.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') commit()
+      else if (event.key === 'Escape') cancel()
+    })
+    input.addEventListener('blur', commit)
+  }
 
   // ── 状态与文案 ──────────────────────────────────────────────────────────────
 
@@ -163,23 +305,15 @@
     dot.dataset.mode = mode || 'idle'
   }
 
-  function setInputEnabled(enabled) {
-    if (term) term.options.disableStdin = !enabled
-  }
-
-  function setExited(exited) {
-    document.body.dataset.exited = exited ? 'true' : 'false'
-  }
-
   function applyStrings(strings) {
     if (strings && typeof strings === 'object') {
       STR = { ...DEFAULT_STRINGS, ...strings }
     }
     titleEl.textContent = STR.title
-    reopenBtn.textContent = STR.reopen
     closeBtn.title = STR.close
     dockBottomBtn.title = STR.dockBottom
     dockRightBtn.title = STR.dockRight
+    newBtn.title = STR.newSession
   }
 
   // ── 主进程事件 ──────────────────────────────────────────────────────────────
@@ -187,9 +321,10 @@
   bridge.on('terminal:appearance', ({ dark, strings }) => {
     currentDark = dark === true
     document.body.dataset.theme = currentDark ? 'dark' : 'light'
-    // 容器背景与 xterm 主题背景同色：fit 取整余量/切换瞬间的裁切区不可见
     document.documentElement.style.setProperty('--term-bg', THEMES[currentDark ? 'dark' : 'light'].background)
-    if (term) term.options.theme = THEMES[currentDark ? 'dark' : 'light']
+    for (const entry of panes.values()) {
+      if (entry.term) entry.term.options.theme = THEMES[currentDark ? 'dark' : 'light']
+    }
     if (strings) applyStrings(strings)
   })
   bridge.on('terminal:host-state', ({ state, message }) => {
@@ -197,44 +332,66 @@
       setStatus(STR.installing, 'busy')
     } else if (state === 'down') {
       setStatus(message || STR.hostFailed, 'error')
-      setInputEnabled(false)
-      setExited(true)
-    } else if (state === 'ready' && !sessionId) {
+    } else if (state === 'ready' && panes.size === 0) {
       setStatus(STR.startingSession, 'busy')
     }
   })
-  bridge.on('terminal:spawned', ({ sessionId: id, shell }) => {
-    sessionId = id
-    initTerminal()
-    if (!term) return
-    setExited(false)
-    term.reset()
+  bridge.on('terminal:spawned', ({ sessionId, shell }) => {
+    createPane(sessionId)
+    const entry = panes.get(sessionId)
+    if (entry) entry.exited = false
+    activatePane(sessionId)
     setStatus(STR.connected.replace('{shell}', shell), 'ready')
-    setInputEnabled(true)
-    reportSize()
-    term.focus()
   })
-  bridge.on('terminal:data', ({ sessionId: id, data }) => {
-    if (id !== sessionId || !term) return
-    term.write(data)
+  bridge.on('terminal:data', ({ sessionId, data }) => {
+    const entry = panes.get(sessionId)
+    if (entry && entry.term) entry.term.write(data)
   })
-  bridge.on('terminal:exit', ({ sessionId: id, code }) => {
-    if (id !== sessionId) return
-    sessionId = null
-    const codeText = code === null || code === undefined ? '-' : code
-    setStatus(`${STR.exited}（code ${codeText}）`, 'error')
-    setInputEnabled(false)
-    setExited(true)
+  bridge.on('terminal:sessions', ({ activeSessionId: broadcastActive, sessions }) => {
+    for (const session of sessions) {
+      sessionNames.set(session.sessionId, session.name)
+      // 兜底：广播里有而页面缺失的会话（异常情形）补建 pane
+      if (!panes.has(session.sessionId)) createPane(session.sessionId)
+    }
+    // 不在广播里的 pane：仅当「自然退出」时保留（exited 态由 exit 事件标记）；
+    // 有意关闭由页面在点击 × 时主动移除，广播不再负责移除。
+    if (broadcastActive && panes.has(broadcastActive)) {
+      activatePane(broadcastActive)
+    } else if (panes.size > 0) {
+      // 优先保持现有激活显示（含退出态 pane），无则退回第一个存活会话
+      const keep = activeSessionId && panes.has(activeSessionId) ? activeSessionId : null
+      const firstAlive = keep ? null : Array.from(panes.values()).find((p) => !p.exited)
+      activatePane(keep ?? (firstAlive ? firstAlive.sessionId : null))
+    } else {
+      renderSessionsList(null)
+    }
+  })
+  bridge.on('terminal:host-state', ({ state }) => {
+    if (state === 'down') {
+      // 宿主崩溃：全部会话失效，清空 pane 与名称
+      for (const sessionId of Array.from(panes.keys())) removePane(sessionId)
+      sessionNames.clear()
+      renderSessionsList(null)
+    }
+  })
+  bridge.on('terminal:exit', ({ sessionId }) => {
+    const entry = panes.get(sessionId)
+    if (!entry) return
+    entry.exited = true
+    entry.pane.classList.add('exited')
+    if (entry.sessionId === activeSessionId) {
+      setStatus(STR.exited, 'error')
+    }
+    renderSessionsList(activeSessionId)
   })
   bridge.on('terminal:error', ({ message }) => {
     setStatus(message || STR.hostFailed, 'error')
-    setInputEnabled(false)
-    setExited(true)
   })
   bridge.on('terminal:focus', () => {
-    if (term) {
-      scheduleFit()
-      term.focus()
+    const entry = panes.get(activeSessionId)
+    if (entry && entry.term) {
+      scheduleFitPane(entry)
+      entry.term.focus()
     }
   })
   bridge.on('terminal:dock-state', ({ mode }) => {
@@ -242,26 +399,34 @@
     dockBottomBtn.classList.toggle('active', !right)
     dockRightBtn.classList.toggle('active', right)
     // 停靠切换后尺寸立即适配（ResizeObserver 有 100ms 防抖，不足以消除切换瞬间的裁切闪现）
-    if (term) reportSize()
+    const entry = panes.get(activeSessionId)
+    if (entry) fitPane(entry)
   })
 
   // ── 本地交互 ────────────────────────────────────────────────────────────────
 
-  reopenBtn.addEventListener('click', () => bridge.spawn())
+  newBtn.addEventListener('click', () => bridge.spawn())
   dockBottomBtn.addEventListener('click', () => bridge.setDock('bottom'))
   dockRightBtn.addEventListener('click', () => bridge.setDock('right'))
   closeBtn.addEventListener('click', () => bridge.togglePanel())
 
-  // 集成冒烟用：从 xterm 缓冲区取纯文本（与渲染器无关，canvas 渲染下也可用）
+  // 集成冒烟用：从激活会话的 xterm 缓冲区取纯文本（与渲染器无关）
   window.__getTermText = () => {
-    if (!term) return ''
+    const entry = panes.get(activeSessionId)
+    if (!entry || !entry.term) return ''
     let text = ''
-    for (let i = 0; i < term.buffer.active.length; i++) {
-      const line = term.buffer.active.getLine(i)
+    for (let i = 0; i < entry.term.buffer.active.length; i++) {
+      const line = entry.term.buffer.active.getLine(i)
       if (line) text += line.translateToString(true) + '\n'
     }
     return text
   }
+  // 集成冒烟用：当前激活会话 id / pane 数量 / 激活态是否退出
+  window.__getTermState = () => ({
+    active: activeSessionId,
+    panes: Array.from(panes.keys()),
+    exited: Array.from(panes.values()).find((p) => p.sessionId === activeSessionId)?.exited === true,
+  })
 
   setStatus(STR.connecting, 'busy')
   bridge.ready()
