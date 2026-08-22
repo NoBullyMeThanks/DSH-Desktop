@@ -501,7 +501,7 @@ function ensureWindowControls() {
       * { box-sizing: border-box; }
       .controls {
         display: flex;
-        width: 84px;
+        width: 112px;
         height: 28px;
         pointer-events: auto;
         -webkit-app-region: no-drag;
@@ -542,11 +542,17 @@ function ensureWindowControls() {
       .restore { display: none; }
       .controls[data-maximized="true"] .maximize { display: none; }
       .controls[data-maximized="true"] .restore { display: block; }
+      .controls[data-terminal-open="true"] button[data-action="terminal"] {
+        color: var(--dsw-alias-state-business-primary, #4d6bfe);
+      }
       @media (prefers-reduced-motion: reduce) {
         button { transition: none; }
       }
     </style>
-    <div class="controls" data-maximized="false">
+    <div class="controls" data-maximized="false" data-terminal-open="false">
+      <button type="button" data-action="terminal">
+        <svg viewBox="0 0 12 12" aria-hidden="true"><path d="M2.5 3.5l3 2.5-3 2.5M6.5 8.5h3" /></svg>
+      </button>
       <button type="button" data-action="minimize">
         <svg viewBox="0 0 12 12" aria-hidden="true"><path d="M2 8.5h8" /></svg>
       </button>
@@ -574,9 +580,11 @@ function renderWindowControlsState(state) {
   if (!windowControlsRoot) return
   const controls = windowControlsRoot.querySelector('.controls')
   controls.dataset.maximized = state.maximized === true ? 'true' : 'false'
+  controls.dataset.terminalOpen = state.terminalOpen === true ? 'true' : 'false'
 
   const labels = state.labels && typeof state.labels === 'object' ? state.labels : {}
   const labelByAction = {
+    terminal: labels.terminal,
     minimize: labels.minimize,
     'toggle-maximize': state.maximized === true ? labels.restore : labels.maximize,
     close: labels.close,
@@ -659,13 +667,123 @@ function observeLayout(nextFrame) {
   resizeObserver = new ResizeObserver(scheduleLayoutUpdate)
   if (frame) resizeObserver.observe(frame)
   if (sidebar) resizeObserver.observe(sidebar)
+  applyPanelInset()
   updateDragRegion()
 }
+
+// ── 布局几何上报（终端面板贴齐会话区域用） ────────────────────────────────────
+
+let lastLayoutReport = null
+
+/**
+ * 会话区标题区域底边线：会话区滚动体 top 即标题区域底边（header 隐藏/空会话
+ * 时为 0）。右侧停靠面板据此对齐自己的 header 底边线（用户要求两线共线）。
+ */
+function measureHeaderBottom() {
+  const scroller = (scrollBody && scrollBody.isConnected) ? scrollBody : findSessionScrollBody()
+  if (!scroller) return 0
+  const top = scroller.getBoundingClientRect().top
+  return Number.isFinite(top) && top > 0 ? Math.round(top) : 0
+}
+
+/**
+ * 上报侧栏右缘与会话区右缘（只报校验过的整数，变化才发）。
+ * 终端面板据此把 bounds 限定在会话区域：侧栏收缩/展开时自动跟随。
+ */
+function reportContentLayout() {
+  if (!frame || !frame.isConnected || !sidebar || !sidebar.isConnected) return
+  const frameRect = frame.getBoundingClientRect()
+  const sidebarRect = sidebar.getBoundingClientRect()
+  const payload = {
+    sidebarRight: Math.round(sidebarRect.right),
+    contentRight: Math.round(frameRect.right),
+    headerBottom: measureHeaderBottom(),
+  }
+  if (!Number.isFinite(payload.sidebarRight) || !Number.isFinite(payload.contentRight)) return
+  if (lastLayoutReport
+    && lastLayoutReport.sidebarRight === payload.sidebarRight
+    && lastLayoutReport.contentRight === payload.contentRight
+    && lastLayoutReport.headerBottom === payload.headerBottom) return
+  lastLayoutReport = payload
+  ipcRenderer.send('dsh:content-layout', payload)
+}
+
+// ── 面板内缩（滚动遮挡修复） ──────────────────────────────────────────────────
+
+let panelInsetBottom = 0
+let panelInsetRight = 0
+let scrollBody = null
+let originalPadding = null
+
+/**
+ * 定位会话区滚动体：布局框架 grid 的第 2 个轨道列（会话区）内、
+ * overflow 可滚（auto/scroll）且高度最大的容器。
+ * 实测结构（dsh web）：会话区 = centerCol 内全高的 scrollBody（消息区与 composer
+ * 都在其滚动流内）。只压缩它的 padding，布局框架零移动、无底部空白；
+ * 此前把 padding 加在布局框架上会造成整页上移与底部空白（用户反馈）。
+ * 找不到时返回 null（不注入，行为退化为纯覆盖）。
+ */
+function findSessionScrollBody() {
+  if (!frame || !frame.isConnected) return null
+  const frameRect = frame.getBoundingClientRect()
+  const sidebarRect = sidebar ? sidebar.getBoundingClientRect() : { right: 0 }
+  let centerCol = null
+  for (const child of frame.children) {
+    const rect = child.getBoundingClientRect()
+    if (rect.left >= sidebarRect.right - 8 && rect.width > 300 && rect.height >= frameRect.height * 0.8) {
+      centerCol = child
+      break
+    }
+  }
+  if (!centerCol) return null
+  let best = null
+  const scan = (element) => {
+    const style = getComputedStyle(element)
+    const rect = element.getBoundingClientRect()
+    if ((style.overflowY === 'auto' || style.overflowY === 'scroll') && rect.height > 100) {
+      if (!best || rect.height > best.rect.height) best = { element, rect }
+    }
+    for (const child of element.children) scan(child)
+  }
+  scan(centerCol)
+  return best ? best.element : null
+}
+
+/**
+ * 终端面板显示/停靠变化时下发内缩：
+ *   bottom 模式 → 滚动体 padding-bottom = 面板高度
+ *   right 模式 → 滚动体 padding-right = 面板宽度
+ * 滚动范围收束到面板内侧边缘，无覆盖遮挡；隐藏时还原。
+ */
+function applyPanelInset() {
+  if (frame && (!scrollBody || !scrollBody.isConnected)) scrollBody = findSessionScrollBody()
+  const target = scrollBody && scrollBody.isConnected ? scrollBody : null
+  if (!target) return
+  if (originalPadding === null) {
+    originalPadding = {
+      bottom: target.style.paddingBottom,
+      right: target.style.paddingRight,
+    }
+  }
+  target.style.paddingBottom = panelInsetBottom > 0 ? `${panelInsetBottom}px` : originalPadding.bottom
+  target.style.paddingRight = panelInsetRight > 0 ? `${panelInsetRight}px` : originalPadding.right
+}
+
+ipcRenderer.on('dsh:panel-inset', (_event, payload) => {
+  const bottom = Number(payload && payload.bottom)
+  const right = Number(payload && payload.right)
+  panelInsetBottom = Number.isFinite(bottom) && bottom > 0 ? Math.round(bottom) : 0
+  panelInsetRight = Number.isFinite(right) && right > 0 ? Math.round(right) : 0
+  if (panelInsetBottom === 0 && panelInsetRight === 0) scrollBody = null // 下次重新定位
+  applyPanelInset()
+})
 
 function updateLayout() {
   scheduled = false
   if (!document.body) return
   if (!frame || !frame.isConnected || !sidebar || !sidebar.isConnected) observeLayout(findFrame())
+  applyPanelInset()
+  reportContentLayout()
   updateDragRegion()
   syncDialogButtonContrast()
 }

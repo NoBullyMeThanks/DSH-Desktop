@@ -25,6 +25,7 @@ const { createOperationLock } = require('./runtime-operation-lock.js')
 const { DEFAULT_UPDATE_PREFERENCES, normalizeUpdatePreferences } = require('./update-preferences.js')
 const { captureStallDiagnostics, extractDebuggerWsUrl } = require('./stall-diagnostics.js')
 const { centeredSplashBounds, normalizeSplashMode, splashLayoutForContent } = require('./startup-layout.js')
+const { createTerminalManager } = require('./terminal-manager.js')
 
 /** 等待 dsh 打印就绪 URL 的超时（首启要初始化 profile，放宽到 120s）。 */
 const READY_TIMEOUT_MS = 120_000
@@ -63,6 +64,7 @@ let startupUpdateChecked = false
 let handlingUnexpectedDshExit = false
 const expectedDshExits = new WeakSet()
 let updatePreferences = { ...DEFAULT_UPDATE_PREFERENCES }
+let terminalManager = null
 const runtimeOperationLock = createOperationLock(() => refreshTrayRuntimeBusy())
 
 function refreshTrayRuntimeBusy() {
@@ -148,6 +150,7 @@ function applySettings(settings) {
     if (tray) tray.setLocale(locale)
     appendLog(`[settings] locale -> ${locale}`)
     sendWindowControlsState()
+    if (terminalManager) terminalManager.refreshAppearance()
   }
   refreshSplashAppearance()
 }
@@ -295,11 +298,13 @@ function sendWindowControlsState() {
   if (wc.isDestroyed()) return
   wc.send('dsh:window-controls-state', {
     maximized: mainWindow.isMaximized(),
+    terminalOpen: Boolean(terminalManager && terminalManager.isPanelVisible()),
     labels: {
       minimize: t(locale, 'windowMinimize'),
       maximize: t(locale, 'windowMaximize'),
       restore: t(locale, 'windowRestore'),
       close: t(locale, 'windowClose'),
+      terminal: t(locale, 'toggleTerminal'),
     },
   })
 }
@@ -410,6 +415,9 @@ function setupIpc() {
       else mainWindow.maximize()
     } else if (action === 'close') {
       mainWindow.close()
+    } else if (action === 'terminal') {
+      terminalManager?.togglePanel()
+      sendWindowControlsState()
     }
   })
 
@@ -574,6 +582,7 @@ function setupShortcuts() {
     { label: '放大（数字键盘）', accelerator: 'CmdOrCtrl+Plus', click: () => zoomContent(ZOOM_STEP) },
     { label: '缩小', accelerator: 'CmdOrCtrl+-', click: () => zoomContent(-ZOOM_STEP) },
     { label: '重置缩放', accelerator: 'CmdOrCtrl+0', click: () => resetZoomContent() },
+    { label: t(locale, 'toggleTerminal'), accelerator: 'CmdOrCtrl+`', click: () => terminalManager?.togglePanel() },
     { label: '全屏', accelerator: 'F11', click: () => toggleFullscreen() },
     { label: '开发者工具', accelerator: 'F12', click: () => toggleDevtools() },
   ]))
@@ -1034,6 +1043,13 @@ function openInBrowser() {
   if (currentUrl) shell.openExternal(currentUrl)
 }
 
+/** 托盘「打开终端」：显示主窗口并展开终端面板。 */
+function openTerminal() {
+  if (!showMainWindow()) return
+  terminalManager?.showPanel()
+  sendWindowControlsState()
+}
+
 function openLog() {
   shell.openPath(LOG_FILE).catch(() => shell.showItemInFolder(LOG_FILE))
 }
@@ -1062,6 +1078,7 @@ function setupTray() {
     startupUpdateCheckEnabled,
     setStartupUpdateCheckEnabled,
     openInBrowser,
+    openTerminal,
     openLog,
     openConfigDir,
     showMainWindow,
@@ -1077,6 +1094,19 @@ async function startup() {
   loadUpdatePreferences()
   applySettings(settingsReader.readSettings())
   setupIpc()
+  terminalManager = createTerminalManager({
+    getMainWindow: () => mainWindow,
+    getLocale: () => locale,
+    getDockMode: () => updatePreferences.terminalDock,
+    setDockMode: (mode) => {
+      if (updatePreferences.terminalDock === mode) return
+      updatePreferences.terminalDock = mode
+      saveUpdatePreferences()
+      appendLog(`[terminal] 停靠偏好 -> ${mode}`)
+    },
+    appendLog,
+  })
+  terminalManager.init()
   setupTray()
   setupShortcuts()
   settingsReader.watchSettings(applySettings)
@@ -1205,6 +1235,10 @@ if (!gotLock) {
   app.on('before-quit', () => {
     isQuitting = true
     stopDsh()
+    if (terminalManager) {
+      // 优雅关闭终端宿主；即使来不及完成，宿主也会在 stdin 关闭后自行收尾
+      terminalManager.shutdown().catch((err) => appendLog(`[terminal] 退出清理异常：${err.message}`))
+    }
     runtime.killActiveChildren() // 应用退出时终止在跑的 npm 子进程，避免孤儿进程继续写运行时目录
     if (logStream && !logStream.writableEnded) {
       try { logStream.end() } catch {}

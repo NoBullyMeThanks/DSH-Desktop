@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'">
+<title>终端</title>
+<link rel="stylesheet" href="terminal-assets/xterm.css">
+<style>
+  :root {
+    --bg: #ffffff;
+    --bg-secondary: #f5f6f7;
+    --fg: #1f2328;
+    --fg-secondary: #626873;
+    --border: rgba(0, 0, 0, 0.08);
+    --accent: #4d6bfe;
+    --term-bg: #ffffff;
+  }
+  [data-theme="dark"] {
+    --bg: #151517;
+    --bg-secondary: #1e1e21;
+    --fg: #e6e6e6;
+    --fg-secondary: #9ba1aa;
+    --border: rgba(255, 255, 255, 0.1);
+    --accent: #4d6bfe;
+    --term-bg: #151517;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    display: flex;
+    flex-direction: column;
+    background: var(--bg);
+    color: var(--fg);
+    font-family: "Segoe UI Variable", "Segoe UI", "Microsoft YaHei UI", sans-serif;
+    user-select: none;
+  }
+  .header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    height: 34px;
+    padding: 0 10px 0 14px;
+    flex: 0 0 auto;
+    border-bottom: 1px solid var(--border);
+  }
+  .dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--fg-secondary);
+    flex: 0 0 auto;
+  }
+  .dot[data-mode="ready"] { background: #2fae5f; }
+  .dot[data-mode="busy"] { background: var(--accent); animation: pulse 1s ease-in-out infinite; }
+  .dot[data-mode="error"] { background: #d64545; }
+  @keyframes pulse { 50% { opacity: 0.35; } }
+  .title { font-size: 12px; color: var(--fg-secondary); }
+  .spacer { flex: 1; }
+  button {
+    height: 24px;
+    min-width: 48px;
+    padding: 0 10px;
+    border: none;
+    border-radius: 8px;
+    background: transparent;
+    color: var(--fg-secondary);
+    font-size: 12px;
+    cursor: pointer;
+  }
+  button:hover { background: var(--bg-secondary); }
+  button:disabled { opacity: 0.4; cursor: default; }
+  #reopenBtn { display: none; color: var(--accent); }
+  body[data-exited="true"] #reopenBtn { display: inline-block; }
+  .dock-btn { min-width: 24px; padding: 0 5px; display: grid; place-items: center; }
+  .dock-btn.active { color: var(--accent); }
+  .dock-btn svg {
+    width: 11px;
+    height: 11px;
+    overflow: visible;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1;
+    stroke-linejoin: round;
+    stroke-linecap: round;
+    vector-effect: non-scaling-stroke;
+  }
+  #closeBtn { min-width: 24px; font-size: 12px; }
+  #terminal {
+    flex: 1;
+    min-height: 0;
+    padding: 6px 0 0 8px;
+    overflow: hidden;
+    /* 与 xterm 主题背景同色（terminal.js 按主题同步 --term-bg）：
+       fit 取整余量与切换瞬间的裁切区不可见，避免露出异色条/块 */
+    background: var(--term-bg, #ffffff);
+  }
+  #terminal .xterm {
+    height: 100%;
+  }
+  #terminal .xterm .xterm-viewport {
+    scrollbar-width: thin;
+  }
+  #status {
+    padding: 3px 14px;
+    font-size: 11px;
+    color: var(--fg-secondary);
+    border-top: 1px solid var(--border);
+    flex: 0 0 auto;
+  }
+</style>
+</head>
+<body data-theme="light">
+  <div class="header">
+    <span class="dot" id="dot"></span>
+    <span class="title" id="title">终端</span>
+    <div class="spacer"></div>
+    <button id="reopenBtn">重新打开</button>
+    <button id="dockBottomBtn" class="dock-btn" title="停靠到底部">
+      <svg viewBox="0 0 12 12" aria-hidden="true"><rect x="2" y="2" width="8" height="8" rx="1.5" /><path d="M4 8h4" /></svg>
+    </button>
+    <button id="dockRightBtn" class="dock-btn" title="停靠到右侧">
+      <svg viewBox="0 0 12 12" aria-hidden="true"><rect x="2" y="2" width="8" height="8" rx="1.5" /><path d="M8 4v4" /></svg>
+    </button>
+    <button id="closeBtn" title="收起面板">✕</button>
+  </div>
+  <div id="terminal"></div>
+  <div class="status" id="status">正在连接…</div>
+  <script src="terminal-assets/xterm.js"></script>
+  <script src="terminal-assets/addon-fit.js"></script>
+  <script src="terminal-assets/addon-clipboard.js"></script>
+  <script src="terminal.js"></script>
+</body>
+</html>

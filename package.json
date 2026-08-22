@@ -34,11 +34,23 @@
       "content-preload.js",
       "startup.html",
       "startup-preload.js",
+      "pty-host.js",
+      "terminal-manager.js",
+      "terminal-host-client.js",
+      "terminal-utils.js",
+      "terminal.html",
+      "terminal-preload.js",
+      "terminal.js",
+      "terminal-assets",
+      "workspace-resolver.js",
       "assets/deepseek-official-fish-black.svg",
       "assets/icon.ico",
       "assets/icon.png",
       "assets/tray.png",
       "package.json"
+    ],
+    "asarUnpack": [
+      "pty-host.js"
     ],
     "win": {
       "icon": "assets/icon.ico",
